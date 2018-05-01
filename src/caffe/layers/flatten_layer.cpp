@@ -33,12 +33,14 @@ void FlattenLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
 template <typename Ftype, typename Btype>
 void FlattenLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
       const vector<Blob*>& top) {
+  CHECK(!Blob::IsSharedDataCycled(bottom));
   top[0]->ShareData(*bottom[0]);
 }
 
 template <typename Ftype, typename Btype>
 void FlattenLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
+  CHECK(!Blob::IsSharedDiffCycled(top));
   bottom[0]->ShareDiff(*top[0]);
 }
 

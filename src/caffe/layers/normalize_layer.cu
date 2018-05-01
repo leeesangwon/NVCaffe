@@ -11,7 +11,7 @@
 
 namespace caffe {
 
-// divid a matrix with vector
+// divide a matrix with vector
 template <typename Dtype>
 __global__ void DivBsx(const int nthreads, const Dtype* A,
     const Dtype* v, const int rows, const int cols,

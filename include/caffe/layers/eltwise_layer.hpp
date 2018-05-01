@@ -44,7 +44,7 @@ class EltwiseLayer : public Layer<Ftype, Btype> {
   TBlob<int> max_idx_;
 
   bool stable_prod_grad_;
-  bool no_coeffs_;
+  bool no_coeffs_, bshared_, tshared_;
 };
 
 }  // namespace caffe

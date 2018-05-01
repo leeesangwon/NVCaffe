@@ -285,7 +285,7 @@ class Net {
   }
 
   bool global_grad_scale_enabled() const {
-    return has_global_grad_scale_param_ && global_grad_scale_param_ > 0.F;
+    return global_grad_scale_param_ > 0.F;
   }
 
   bool inner_net() const {
@@ -444,7 +444,7 @@ class Net {
   /// Inner net runs on singe GPU (see recurrent layers)
   const bool inner_net_;
 
-  static constexpr float GRAD_FACTOR = 1.E6F;
+  static constexpr float GRAD_FACTOR = 1.E9F;
 
   static constexpr int END_OF_ITERATION = -1;
   static constexpr int END_OF_TRAIN = -2;

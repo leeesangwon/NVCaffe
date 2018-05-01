@@ -7,6 +7,11 @@ namespace caffe {
 
 template<typename Ftype, typename Btype>
 void SplitLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom, const vector<Blob*>& top) {
+  CHECK(!Blob::IsSharedDataCycled(bottom));
+  for (int i = 0; i < top.size(); ++i) {
+    top[i]->ReshapeLike(*bottom[0]);
+    top[i]->ShareData(*bottom[0]);
+  }
 }
 
 template<typename Ftype, typename Btype>

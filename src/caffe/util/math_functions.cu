@@ -211,7 +211,7 @@ void caffe_gpu_memcpy(const size_t N, const void* X, void* Y, int group) {
   if (X != Y) {
     cudaStream_t stream = Caffe::thread_stream(group);
     CUDA_CHECK(cudaMemcpyAsync(Y, X, N, cudaMemcpyDefault, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK_ARG(cudaStreamSynchronize(stream), group);
   }
 }
 

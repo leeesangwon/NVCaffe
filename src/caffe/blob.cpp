@@ -73,6 +73,7 @@ const int* Blob::gpu_shape() const {
 
 void Blob::ShareData(const Blob& other) {
   CHECK_NE(this, &other);
+//  CHECK(!other.IsSharedDataCycled());
   if (data_tensor_.get() == other.data_tensor_.get()) {
     CHECK_EQ(data_shared_with_, &other);
     return;
@@ -86,6 +87,7 @@ void Blob::ShareData(const Blob& other) {
 
 void Blob::ShareDiff(const Blob& other) {
   CHECK_NE(this, &other);
+///  CHECK(!other.IsSharedDiffCycled());
   if (diff_tensor_.get() == other.diff_tensor_.get()) {
     CHECK_EQ(diff_shared_with_, &other);
     return;
@@ -394,7 +396,16 @@ void Blob::FromProto(const BlobProto& proto, bool reshape) {
 
 void Blob::ToProto(BlobProto* proto, bool store_in_old_format, bool write_diff) const {
   if (store_in_old_format) {
-    ToProtoBVLC(proto, write_diff);
+    if (data_type() == tp<float16>()) {
+      TBlob<float> b32;
+      b32.CopyFrom(*this, false, true);
+      if (write_diff) {
+        b32.CopyFrom(*this, true, false);
+      }
+      b32.ToProtoBVLC(proto, write_diff);
+    } else {
+      ToProtoBVLC(proto, write_diff);
+    }
     return;
   }
   CHECK(is_current_data_valid());

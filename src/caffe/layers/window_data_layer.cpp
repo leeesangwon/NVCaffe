@@ -210,7 +210,7 @@ unsigned int WindowDataLayer<Ftype, Btype>::PrefetchRand() {
 
 // This function is called on prefetch thread
 template <typename Ftype, typename Btype>
-void WindowDataLayer<Ftype, Btype>::load_batch(Batch* batch,
+bool WindowDataLayer<Ftype, Btype>::load_batch(Batch* batch,
     int thread_id, size_t queue_id) {
   // At each iteration, sample N windows where N*p are foreground (object)
   // windows and N*(1-p) are background (non-object) windows
@@ -278,7 +278,7 @@ void WindowDataLayer<Ftype, Btype>::load_batch(Batch* batch,
         cv_img = cv::imread(image.first, CV_LOAD_IMAGE_COLOR);
         if (!cv_img.data) {
           LOG(ERROR) << "Could not open or find file " << image.first;
-          return;
+          return true;
         }
       }
       read_time += timer.MicroSeconds();
@@ -453,6 +453,7 @@ void WindowDataLayer<Ftype, Btype>::load_batch(Batch* batch,
   DLOG(INFO) << "     Read time: " << read_time / 1000 << " ms.";
   DLOG(INFO) << "Transform time: " << trans_time / 1000 << " ms.";
   batch->set_id(this->batch_id(thread_id));
+  return true;
 }
 
 INSTANTIATE_CLASS_CPU_FB(WindowDataLayer);

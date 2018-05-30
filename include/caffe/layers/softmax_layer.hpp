@@ -42,7 +42,7 @@ class SoftmaxLayer : public Layer<Ftype, Btype> {
   /// sum_multiplier is used to carry out sum using BLAS (CPU only)
   TBlob<Ftype> sum_multiplier_;
   /// scale is an intermediate TBlob to hold temporary results.
-  TBlob<float> scale_;
+  TBlob<Ftype> scale_;
 };
 
 }  // namespace caffe

@@ -38,7 +38,7 @@ class VideoDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
   virtual inline int MinTopBlobs() const { return 1; }
 
  protected:
-  void load_batch(Batch* batch, int thread_id, size_t queue_id) override;
+  bool load_batch(Batch* batch, int thread_id, size_t queue_id) override;
   void start_reading() override {}
 
   VideoDataParameter_VideoType video_type_;

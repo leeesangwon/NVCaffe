@@ -58,10 +58,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_gpu(
   const Ftype* label = bottom[1]->gpu_data<Ftype>();
   const int dim = prob_->count() / outer_num_;
   const int nthreads = outer_num_ * inner_num_;
-  // Since this memory is not used for anything until it is overwritten
-  // on the backward pass, we use it here to avoid having to allocate new GPU
-  // memory to accumulate intermediate results in the kernel.
-  Ftype* loss_data = bottom[0]->mutable_gpu_diff<Ftype>();
+  Ftype* loss_data = loss_data_.mutable_gpu_diff();
   // Similarly, this memory is never used elsewhere, and thus we can use it
   // to avoid having to allocate additional GPU memory.
   Ftype* counts = prob_->template mutable_gpu_diff<Ftype>();

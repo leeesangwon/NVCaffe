@@ -40,7 +40,8 @@ DataReader<DatumType>::DataReader(const LayerParameter& param,
       sample_only_(sample_only),
       cache_(cache && !sample_only),
       shuffle_(cache_ && shuffle),
-      epoch_count_required_(epoch_count_required) {
+      epoch_count_required_(epoch_count_required),
+      cursors_cached_(0) {
   CHECK(queues_num_);
   CHECK(queue_depth_);
   batch_size_ = param.data_param().batch_size();

@@ -58,7 +58,9 @@ __global__ void kernel_channel_div(const int count,
   CUDA_KERNEL_LOOP(index, count) {
     int n = index / channels / spatial_dim;
     int s = index % spatial_dim;
-    data[index] /= (Mtype)channel_sum[n * spatial_dim + s];
+    Dtype cs = channel_sum[n * spatial_dim + s];
+    data[index] /= (Mtype)(cs > min_dtype<Dtype>() || cs < - min_dtype<Dtype>() ?
+        cs : min_dtype<Dtype>());
   }
 }
 
@@ -83,7 +85,7 @@ void SoftmaxLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
     const vector<Blob*>& top) {
   const Ftype* bottom_data = bottom[0]->gpu_data<Ftype>();
   Ftype* top_data = top[0]->mutable_gpu_data<Ftype>();
-  float* scale_data = scale_.mutable_gpu_data();
+  Ftype* scale_data = scale_.mutable_gpu_data();
   int count = bottom[0]->count();
   int channels = top[0]->shape(softmax_axis_);
   caffe_copy(count, bottom_data, top_data);
@@ -123,7 +125,7 @@ void SoftmaxLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
   const Btype* top_diff = top[0]->gpu_diff<Btype>();
   const Btype* top_data = top[0]->gpu_data<Btype>();
   Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
-  float* scale_data = scale_.mutable_gpu_data();
+  Ftype* scale_data = scale_.mutable_gpu_data();
   int count = top[0]->count();
   int channels = top[0]->shape(softmax_axis_);
   caffe_copy(count, top_diff, bottom_diff);

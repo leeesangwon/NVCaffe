@@ -160,7 +160,12 @@ class DataReader : public InternalThread {
   }
 
   void just_cached() {
+    ++cursors_cached_;
     data_cache_->just_cached();
+  }
+
+  bool cached_all() const {
+    return cursors_cached_.load() == this->threads_num();
   }
 
  protected:
@@ -186,6 +191,7 @@ class DataReader : public InternalThread {
   bool sample_only_;
   const bool cache_, shuffle_;
   const bool epoch_count_required_;
+  std::atomic_int cursors_cached_;
 
   DataCache* data_cache_;
   static std::mutex db_mutex_;

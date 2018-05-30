@@ -809,6 +809,8 @@ size_t Net::received_contiguous_count(int type_id, const std::set<int>& au_ids, 
   return cnt_ret;
 }
 
+std::mutex mutex_ru_;
+
 void Net::ReduceAndUpdate(int type_id) {
   DLOG(INFO) << "[" << Caffe::current_device()
              << "] Entering ReduceAndUpdate thread " << lwp_id()
@@ -906,11 +908,11 @@ void Net::ReduceAndUpdate(int type_id) {
       rate = -1.F;
       solver_->iteration_complete_signal(type_id);
     } else {
-      au_ids.emplace(param_id);
+      std::lock_guard<std::mutex> lock(mutex_ru_);
+      au_ids.insert(param_id);
     }
   }
-  DLOG(INFO) << "[" << Caffe::current_device()
-             << "] Leaving ReduceAndUpdate thread " << lwp_id();
+  DLOG(INFO) << print_current_device() << " Leaving ReduceAndUpdate thread " << lwp_id();
 }
 
 void Net::add_wgrad_sq(float wgrad_sq) {
@@ -1380,9 +1382,9 @@ void Net::InitializeLearnableDiffSpace(int type_id) {
   CHECK_LT(type_id, 2);
   const Type t = (Type) learnable_types_[type_id];
   if (learnable_params_ptrs_[type_id].size() == learnable_params_.size()) {
-    LOG(INFO) << print_current_device() << " Already reserved "
-              << learnable_space_size_[type_id] << " bytes of shared learnable space for type "
-              << Type_Name(t);
+    LOG_IF(INFO, learnable_space_size_[type_id] > 0) << print_current_device()
+        << " Already reserved " << learnable_space_size_[type_id]
+        << " bytes of shared learnable space for type " << Type_Name(t);
     return;
   }
   learnable_space_size_[type_id] = 0UL;

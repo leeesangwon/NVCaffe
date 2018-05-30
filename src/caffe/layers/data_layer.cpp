@@ -204,7 +204,7 @@ DataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom, const vecto
 }
 
 template<typename Ftype, typename Btype>
-void DataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
+bool DataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
   const bool sample_only = sample_only_.load();
   // Reshape according to the first datum of each batch
   // on single input batches allows for inputs of varying dimension.
@@ -348,6 +348,7 @@ void DataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t que
   batch->set_data_packing(packing);
   batch->set_id(current_batch_id);
   sample_only_.store(false);
+  return reader->cached_all();
 }
 
 INSTANTIATE_CLASS_FB(DataLayer);

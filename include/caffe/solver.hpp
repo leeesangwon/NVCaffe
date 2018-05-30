@@ -76,6 +76,9 @@ class Solver {
     return param_;
   }
   shared_ptr<Net> net() {
+    if (net_) {
+      net_->set_solver(this);
+    }
     return net_;
   }
   const vector<shared_ptr<Net>>& test_nets() {

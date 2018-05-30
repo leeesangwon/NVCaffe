@@ -123,7 +123,7 @@ class SoftmaxWithLossLayer : public LossLayer<Ftype, Btype> {
   int ignore_label_;
   /// How to normalize the output loss.
   LossParameter_NormalizationMode normalization_;
-
+  TBlob<Ftype> loss_data_;
   int softmax_axis_, outer_num_, inner_num_;
 };
 

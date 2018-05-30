@@ -673,7 +673,7 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
     } else {
       CHECK_EQ((*match_indices)[max_idx], -1);
       bool is_ignored_gt = ignore_difficult_gt && gt_bboxes[gt_indices[max_gt_idx]].difficult();
-      if(is_ignored_gt) { //pred matches with ignored gt. set to -2 to ignore
+      if (is_ignored_gt) { //pred matches with ignored gt. set to -2 to ignore
         (*match_indices)[max_idx] = -2;
       } else {
         (*match_indices)[max_idx] = gt_indices[max_gt_idx];

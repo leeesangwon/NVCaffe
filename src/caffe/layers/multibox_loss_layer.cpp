@@ -293,6 +293,9 @@ void MultiBoxLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       Dtype normalizer = LossLayer<Ftype, Btype>::GetNormalizer(
           normalization_, num_, num_priors_, num_matches_);
       Dtype loss_weight = top[0]->cpu_diff<Dtype>()[0] / normalizer;
+      if (this->parent_net() != NULL) {
+        loss_weight *= this->parent_net()->global_grad_scale();
+      }
       caffe_scal(loc_pred_->count(), loss_weight, loc_pred_->mutable_cpu_diff<Dtype>());
       // Copy gradient back to bottom[0].
       const Dtype* loc_pred_diff = loc_pred_->cpu_diff<Dtype>();
@@ -334,6 +337,9 @@ void MultiBoxLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       Dtype normalizer = LossLayer<Ftype, Btype>::GetNormalizer(
           normalization_, num_, num_priors_, num_matches_);
       Dtype loss_weight = top[0]->cpu_diff<Dtype>()[0] / normalizer;
+      if (this->parent_net() != NULL) {
+        loss_weight *= this->parent_net()->global_grad_scale();
+      }
       caffe_scal(conf_pred_->count(), loss_weight,
                  conf_pred_->mutable_cpu_diff<Dtype>());
       // Copy gradient back to bottom[1].

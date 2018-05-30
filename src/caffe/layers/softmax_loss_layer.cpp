@@ -59,6 +59,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Reshape(
     // softmax output
     top[1]->ReshapeLike(*bottom[0]);
   }
+  loss_data_.ReshapeLike(*bottom[0]);
 }
 
 template <typename Ftype, typename Btype>

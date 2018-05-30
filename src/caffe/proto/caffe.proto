@@ -578,7 +578,7 @@ message ParamSpec {
 // NOTE
 // Update the next available ID when you add a new LayerParameter field.
 //
-// LayerParameter next available layer-specific ID: 152 (last added: recurrent_param)
+// LayerParameter next available layer-specific ID: 153 (last added: trt_param)
 message LayerParameter {
   optional string name = 1; // the layer name
   optional string type = 2; // the layer type
@@ -702,6 +702,7 @@ message LayerParameter {
   optional VideoDataParameter video_data_param = 207;
   optional WindowDataParameter window_data_param = 129;
   optional RecurrentParameter recurrent_param = 151;
+  optional TRTParameter trt_param = 152;
 
   // NVIDIA PARAMETERS (Start with 68 because NV is 68 on an old-style phone)
   optional DetectNetGroundTruthParameter detectnet_groundtruth_param = 6801;
@@ -1305,6 +1306,9 @@ message DataParameter {
   optional bool cache = 13 [default = false];
   // Shuffle observations while reading for better accuracy. Ignored if 'cache' is false.
   optional bool shuffle = 14 [default = false];
+  // Cache all observations in RAM before doing anything else.
+  // Cache might fail if it doesn't fit.
+  optional bool precache = 16 [default = false];
 }
 
 // Message that store parameters used by DetectionEvaluateLayer
@@ -1549,6 +1553,9 @@ message ImageDataParameter {
   optional uint32 threads  = 14 [default = 4];
   // Whether or not ImageLayer should cache all files in RAM. Cache might fail if it doesn't fit.
   optional bool cache = 15 [default = false];
+  // Whether or not ImageLayer should cache all files in RAM before doing anything else.
+  // Cache might fail if it doesn't fit.
+  optional bool precache = 16 [default = false];
 }
 
 message InfogainLossParameter {
@@ -2023,6 +2030,31 @@ message TanHParameter {
     CUDNN = 2;
   }
   optional Engine engine = 1 [default = DEFAULT];
+}
+
+// TRTLayer parameters
+message TRTParameter {
+  enum TRTMode {
+    FP32 = 0;
+    FP16 = 1;
+    INT8 = 2;
+  }
+
+  optional TRTMode trt_mode = 1 [default = INT8];
+  // When computing accuracy, count as correct by comparing the true label to
+  // the top k scoring classes.  By default, only compare to the top scoring
+  // class (i.e. argmax).
+  optional uint32 top_k = 2 [default = 1];
+  // Deploy file name to run inference for.
+  required string deploy = 3;
+  // Weights (.caffemodel) file name to run inference for.
+  required string model = 4;
+  // Output blob names (like "prob")
+  repeated string deploy_outputs = 5;
+  // Int8 calibrator file
+  optional string calibrator = 6;
+  // TRT batch
+//  optional uint32 batch_size = 7 [default = 1];
 }
 
 // Message that stores parameters used by TileLayer

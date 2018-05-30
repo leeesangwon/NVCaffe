@@ -78,7 +78,7 @@ void VideoDataLayer<Ftype, Btype>::DataLayerSetUp(
 
 // This function is called on prefetch thread
 template <typename Ftype, typename Btype>
-void VideoDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
+bool VideoDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
   CPUTimer batch_timer;
   batch_timer.Start();
   double read_time = 0;
@@ -149,6 +149,7 @@ void VideoDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   DLOG(INFO) << "Prefetch batch: " << batch_timer.MilliSeconds() << " ms.";
   DLOG(INFO) << "     Read time: " << read_time / 1000 << " ms.";
   DLOG(INFO) << "Transform time: " << trans_time / 1000 << " ms.";
+  return true;
 }
 
 INSTANTIATE_CLASS_FB(VideoDataLayer);

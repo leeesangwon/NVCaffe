@@ -153,7 +153,7 @@ cv::Mat ImageDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const 
 }
 
 template <typename Ftype, typename Btype>
-void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t) {
+bool ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t) {
   CHECK(batch->data_->count());
   const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
   const int batch_size = image_data_param.batch_size();
@@ -266,6 +266,7 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   }
   batch->set_data_packing(packing);
   batch->set_id(this->batch_id(thread_id));
+  return cached_[id_];
 }
 
 INSTANTIATE_CLASS_CPU_FB(ImageDataLayer);

@@ -381,6 +381,10 @@ class LayerBase {
    */
   virtual void ToProto(LayerParameter* param, bool write_diff = false) = 0;
 
+  virtual std::string print_stats() const {
+    return "";
+  }
+
   std::string print_current_device() const;
 
  protected:

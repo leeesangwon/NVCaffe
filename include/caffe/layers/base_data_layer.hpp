@@ -93,7 +93,7 @@ class BasePrefetchingDataLayer : public BaseDataLayer<Ftype, Btype>, public Inte
 
   virtual void ResizeQueues();
   virtual void InitializePrefetch();
-  virtual void load_batch(Batch* batch, int thread_id, size_t queue_id) = 0;
+  virtual bool load_batch(Batch* batch, int thread_id, size_t queue_id) = 0;
   virtual void start_reading() = 0;
   virtual size_t queue_id(size_t thread_id) const {
     return thread_id;
@@ -130,6 +130,7 @@ class BasePrefetchingDataLayer : public BaseDataLayer<Ftype, Btype>, public Inte
   std::vector<int> last_shape_;
   int batch_size_;
   Flag iter0_;
+  bool precache_;
 };
 
 }  // namespace caffe

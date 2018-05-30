@@ -178,3 +178,12 @@ if(TEST_FP16)
   add_definitions(-DTEST_FP16=1)
 endif()
 
+# ---[ TensorRT
+if(USE_TRT)
+  find_package(TRT REQUIRED)
+endif()
+if(TRT_FOUND)
+  include_directories(SYSTEM ${TRT_INCLUDE_DIR})
+  list(APPEND Caffe_LINKER_LIBS ${TRT_LIBRARIES})
+  add_definitions(-DUSE_TRT=1)
+endif()

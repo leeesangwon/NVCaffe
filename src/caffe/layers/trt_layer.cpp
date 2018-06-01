@@ -67,7 +67,7 @@ void TRTLayer<Ftype, Btype>::LayerSetUp(
   }
   output_ = this->layer_param_.trt_param().deploy_outputs(0);
   builder->setMaxBatchSize(batch_size_);
-  builder->setMaxWorkspaceSize(1 << 20);
+  builder->setMaxWorkspaceSize(1 << 24);
 
   TRTParameter_TRTMode trt_mode = this->layer_param_.trt_param().trt_mode();
   if (trt_mode == TRTParameter_TRTMode::TRTParameter_TRTMode_INT8) {

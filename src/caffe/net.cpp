@@ -115,9 +115,8 @@ void Net::Init(const NetParameter& in_param) {
     LOG(INFO) << "Using " << Type_Name(default_bmath) << " as default backward math type";
   }
 
-  wgrad_sq_.store(0LL);
+  wgrad_norms_.store(0LL);
   global_grad_scale_coeff_ = 1.F;
-  has_global_grad_scale_param_ = in_param.has_global_grad_scale();
   global_grad_scale_param_ = in_param.global_grad_scale();
   global_grad_scale_adaptive_ = in_param.global_grad_scale_adaptive();
 
@@ -809,8 +808,6 @@ size_t Net::received_contiguous_count(int type_id, const std::set<int>& au_ids, 
   return cnt_ret;
 }
 
-std::mutex mutex_ru_;
-
 void Net::ReduceAndUpdate(int type_id) {
   DLOG(INFO) << "[" << Caffe::current_device()
              << "] Entering ReduceAndUpdate thread " << lwp_id()
@@ -848,20 +845,20 @@ void Net::ReduceAndUpdate(int type_id) {
           if (solver_->stop_reducing_requested(type_id)) {
             break;
           }
-          add_wgrad_sq(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
+          add_wgrad_norm(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
           continue;
         }
       } else {
         if (!clip_grads) {
           this->learnable_params()[param_id]->scale_diff(1.F / global_grad_scale(), handle);
-          add_wgrad_sq(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
+          add_wgrad_norm(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
         }
         continue;
       }
     } else if (clip_grads && Caffe::solver_count() == 1) {
       solver_->ClipGradientsAndNormalize(handle, type_id, au_ids);
       for (int i : au_ids) {
-        add_wgrad_sq(solver_->ApplyUpdate(i, handle, rate, false, clear_grads));
+        add_wgrad_norm(solver_->ApplyUpdate(i, handle, rate, false, clear_grads));
       }
       au_ids.clear();
     }
@@ -897,7 +894,7 @@ void Net::ReduceAndUpdate(int type_id) {
           }
 
           for (int i : au_ids) {
-            add_wgrad_sq(solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads));
+            add_wgrad_norm(solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads));
           }
           au_ids.erase(au_ids.find(id_from), au_ids.end());
         }
@@ -908,34 +905,33 @@ void Net::ReduceAndUpdate(int type_id) {
       rate = -1.F;
       solver_->iteration_complete_signal(type_id);
     } else {
-      std::lock_guard<std::mutex> lock(mutex_ru_);
       au_ids.insert(param_id);
     }
   }
   DLOG(INFO) << print_current_device() << " Leaving ReduceAndUpdate thread " << lwp_id();
 }
 
-void Net::add_wgrad_sq(float wgrad_sq) {
-  if (wgrad_sq > 0.F) {
-    wgrad_sq_.fetch_add(std::llround(wgrad_sq * GRAD_FACTOR));
+void Net::add_wgrad_norm(float wgrad_norm) const {
+  if (!std::isnan(wgrad_norm) && !std::isinf(wgrad_norm) && wgrad_norm > 0.F) {
+    atomic_maximum(wgrad_norms_, std::llround(wgrad_norm * GRAD_FACTOR));
   }
 }
 
-float Net::wgrad_sq() {
-  return wgrad_sq_.exchange(0LL) / GRAD_FACTOR;
+float Net::wgrad_norm() const {
+  return wgrad_norms_.exchange(0LL) / GRAD_FACTOR;
 }
 
 void Net::update_grad_scale() {
   global_grad_scale_coeff_ = 1.F;
   if (global_grad_scale_enabled()) {
     if (global_grad_scale_adaptive_) {
-      const float wgsq = wgrad_sq();
-      if (wgsq > 0.F) {
-        global_grad_scale_coeff_ = std::sqrt(wgsq) * global_grad_scale_param_;
-        return;
+      const float wgn = wgrad_norm();
+      if (wgn > 0.F) {
+        global_grad_scale_coeff_ = (4.F / wgn) * global_grad_scale_param_;
       }
+    } else {
+      global_grad_scale_coeff_ = global_grad_scale_param_;
     }
-    global_grad_scale_coeff_ = global_grad_scale_param_;
   }
 }
 

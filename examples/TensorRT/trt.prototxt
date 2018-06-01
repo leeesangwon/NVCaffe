@@ -30,7 +30,7 @@ layer {
   bottom: "label"
   top: "trt"
   trt_param {
-    trt_mode: INT8 # FP16 FP32
+    trt_mode: INT8 #  FP16 # FP32
     top_k: 5
     #model: "examples/TensorRT/resnet50-0.16.6-idl-fp16-88ep_10526_iter_107500_score0_0.767772_score1_0.933177_score2_0.908358.caffemodel"
     model: "examples/TensorRT/old_format_iter_107500_score0_0.763516_score1_0.938232_score2_0.896403.caffemodel"

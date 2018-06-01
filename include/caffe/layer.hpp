@@ -577,6 +577,19 @@ inline float Layer<Ftype, Btype>::Forward(const vector<Blob*>& bottom, const vec
           const Ftype* loss_weights = top[top_id]->cpu_diff<Ftype>();
           for (int i = 0; i < count; ++i) {
             blob_loss += (float)data[i] * (float)loss_weights[i];
+
+//            if (std::isnan(blob_loss)) {
+//              LOG(ERROR) << " ****** Forward CPU Layer '" << name()
+//                         << "' of type " << type()
+//                         << ", FT " << Type_Name(forward_type())
+//                         << " BT " << Type_Name(backward_type())
+//                  << " iter " << this->iter()
+//                         << " returned loss: " << loss
+//                         << " count: " << count
+//                         << " blob_loss: " << blob_loss;
+//              return blob_loss;
+//            }
+//
           }
         } else {
           const Ftype *data = top[top_id]->gpu_data<Ftype>();

@@ -20,6 +20,9 @@ float caffe_gpu_atomic_add(const float val, float* address) {
 template <>
 inline __device__
 double caffe_gpu_atomic_add(const double val, double* address) {
+#if __CUDA_ARCH__ >= 600 || !defined(__CUDA_ARCH__)
+  return atomicAdd(address, val);
+#else
   unsigned long long int* address_as_ull =  // NOLINT(runtime/int)
       // NOLINT_NEXT_LINE(runtime/int)
       reinterpret_cast<unsigned long long int*>(address);
@@ -31,6 +34,7 @@ double caffe_gpu_atomic_add(const double val, double* address) {
         __double_as_longlong(val + __longlong_as_double(assumed)));
   } while (assumed != old);
   return __longlong_as_double(old);
+#endif
 }
 
 template <>
@@ -38,7 +42,9 @@ inline __device__
 float16 caffe_gpu_atomic_add(const float16 val, float16* address) {
 // TODO check for FP16 implementation in future CUDA releases
 // See atomicA in cudnn_ops.hxx
-
+//#if __CUDA_ARCH__ >= 600 || !defined(__CUDA_ARCH__)
+//  return atomicAdd(address, val);
+//#else
   // The size of 'unsigned' should be 4B, twice the size of 'half'.
   union U {
     unsigned u;
@@ -61,6 +67,7 @@ float16 caffe_gpu_atomic_add(const float16 val, float16* address) {
     old_val.u = atomicCAS(aligned_address, assumed.u, new_val.u);
   } while (assumed.u != old_val.u);
   return ret;
+//#endif
 }
 
 }  // namespace caffe

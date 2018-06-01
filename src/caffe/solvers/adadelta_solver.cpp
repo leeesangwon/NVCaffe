@@ -28,7 +28,7 @@ float AdaDeltaSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, floa
   const vector<shared_ptr<Blob>>& net_params = this->net_->learnable_params();
   shared_ptr<Blob> param = net_params[param_id];
 
-  float wgrad_sq = 1.F;  // stub
+  float wgrad_max = 1.F;  // stub
 
   shared_ptr<TBlob<Dtype>> history = this->history_[param_id];
   shared_ptr<TBlob<Dtype>> update = this->update_[param_id];
@@ -114,7 +114,7 @@ float AdaDeltaSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, floa
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_sq;
+  return wgrad_max;
 }
 
 INSTANTIATE_CLASS(AdaDeltaSolver);

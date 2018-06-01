@@ -407,6 +407,9 @@ inline void caffe_convert(bool use_gpu, const int n, const T_IN* in, T_OUT* out)
   }
 }
 
+//template<typename T>
+//void caffe_gpu_histogram(unsigned int N, const T* x, unsigned int* h);
+
 }  // namespace caffe
 
 #endif  // CAFFE_UTIL_MATH_FUNCTIONS_H_

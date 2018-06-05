@@ -1137,13 +1137,12 @@ void Net::CopyTrainedLayersFrom(const NetParameter& param) {
     LOG(INFO) << "Copying source layer " << source_layer_name << " Type:"
               << source_layer_type << " #blobs=" << source_layer.blobs_size();
     // check if BN is in legacy DIGITS format?
-    if (source_layer_type == "BatchNorm" && source_layer.blobs_size() == 5) {
+    if (source_layer_type == "BatchNorm") {
       for (int j = 0; j < target_blobs.size(); ++j) {
         const bool kReshape = true;
         target_blobs[j]->FromProto(source_layer.blobs(j), kReshape);
-        DLOG(INFO) << target_blobs[j]->count();
       }
-      if (target_blobs[4]->count() == 1) {
+      if (source_layer.blobs_size() == 5 && target_blobs[4]->count() == 1) {
         // old format: 0 - scale , 1 - bias,  2 - mean , 3 - var, 4 - reserved
         // new format: 0 - mean  , 1 - var,  2 - reserved , 3- scale, 4 - bias
         LOG(INFO) << "BN legacy DIGITS format detected ... ";
@@ -1153,6 +1152,16 @@ void Net::CopyTrainedLayersFrom(const NetParameter& param) {
         std::swap(target_blobs[2], target_blobs[4]);
         std::swap(target_blobs[3], target_blobs[4]);
         LOG(INFO) << "BN Transforming to new format completed.";
+      }
+      if (source_layer.blobs_size() == 3) {
+        const float scale_factor = target_blobs[2]->cpu_data<float>()[0] == 0.F ?
+                                   0.F : 1.F / target_blobs[2]->cpu_data<float>()[0];
+        caffe_cpu_scale(target_blobs[0]->count(), scale_factor,
+                        target_blobs[0]->cpu_data<float>(),
+                        target_blobs[0]->mutable_cpu_data<float>());
+        caffe_cpu_scale(target_blobs[1]->count(), scale_factor,
+                        target_blobs[1]->cpu_data<float>(),
+                        target_blobs[1]->mutable_cpu_data<float>());
       }
     } else {
       for (int j = 0; j < target_blobs.size(); ++j) {

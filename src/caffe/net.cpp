@@ -1162,6 +1162,7 @@ void Net::CopyTrainedLayersFrom(const NetParameter& param) {
         caffe_cpu_scale(target_blobs[1]->count(), scale_factor,
                         target_blobs[1]->cpu_data<float>(),
                         target_blobs[1]->mutable_cpu_data<float>());
+        target_blobs[2]->mutable_cpu_data<float>()[0] = 1.F;
       }
     } else {
       for (int j = 0; j < target_blobs.size(); ++j) {

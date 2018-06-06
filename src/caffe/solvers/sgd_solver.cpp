@@ -254,6 +254,10 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
     local_rate = rate * local_rate;
   }
 
+
+  this->net_->add_wgrad_norm(wgrad_max, param);
+
+
   // Compute the update to history, then copy it to the parameter diff.
 
   if (Caffe::mode() == Caffe::CPU) {

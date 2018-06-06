@@ -925,10 +925,61 @@ void Net::update_grad_scale() {
   global_grad_scale_coeff_ = 1.F;
   if (global_grad_scale_enabled()) {
     if (global_grad_scale_adaptive_) {
-      const float wgn = wgrad_norm();
-      if (wgn > 0.F) {
-        global_grad_scale_coeff_ = (4.F / wgn) * global_grad_scale_param_;
+      float wgn = wgrad_norm();
+      wgn = wgn > 0.F ? 2.F - std::log2(wgn) : 0.F;
+
+      TBlob<unsigned int> hg;
+      hg.Reshape(vector<int>{CAFFE_CUDA_NUM_THREADS});
+      for (int type_id = 0; type_id < learnable_types_.size(); ++type_id) {
+        const Type t = (Type) learnable_types_[type_id];
+        unsigned int lscnt = (unsigned int)(learnable_space_size_[type_id] / tsize(t));
+        void* ptr = learnable_space_[type_id].data();
+
+        for (int j=0; j < 100; ++j) {
+          const float16 *ppp = learnable_params_[j]->cpu_data<float16>();
+          LOG(INFO) << "$$$$$ " << (float) ppp[0];
+        }
+
+        switch (t) {
+          case FLOAT:
+            caffe_gpu_histogram(lscnt, reinterpret_cast<float*>(ptr), hg.mutable_gpu_data(false));
+            break;
+          case FLOAT16:
+            caffe_gpu_histogram(lscnt, reinterpret_cast<float16*>(ptr), hg.mutable_gpu_data(false));
+            break;
+          case DOUBLE:
+            caffe_gpu_histogram(lscnt, reinterpret_cast<double*>(ptr), hg.mutable_gpu_data(false));
+            break;
+          default:
+            LOG(FATAL) << "Unsupported learnable type";
+        }
+        const unsigned int *ph = hg.cpu_data();
+        float modev = 0.F;
+        int mode = 0U;
+        for (int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
+          float v = (float)ph[i];
+
+
+
+    if (v > 0.) {
+      std::cout << i << " " << v << std::endl;
+    }
+
+
+
+          if (v > modev) {
+            modev = v;
+            mode = i;
+          }
+        }
+        if (mode > 0) {
+          mode = CAFFE_CUDA_NUM_THREADS / 2 - mode;
+          LOG(INFO) << "$$$$$ " << mode;
+        }
       }
+
+
+      global_grad_scale_coeff_ = std::pow(2.F, wgn) * global_grad_scale_param_;
     } else {
       global_grad_scale_coeff_ = global_grad_scale_param_;
     }

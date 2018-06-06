@@ -213,6 +213,48 @@ TYPED_TEST_CASE(GPUMathFunctionsTest, TestDtypes);
   //  EXPECT_EQ(reference_distance, computed_distance);
   //  }
 
+
+TYPED_TEST(GPUMathFunctionsTest, TestHistogram) {
+
+  TBlob<TypeParam> blob;
+
+  blob.Reshape(11, 117, 119, 123);
+  // fill the values
+  FillerParameter filler_param;
+  GaussianFiller<TypeParam> filler(filler_param);
+  filler.Fill(&blob);
+
+  int n = blob.count();
+  TBlob<unsigned int> hg;
+  hg.Reshape(vector<int>{CAFFE_CUDA_NUM_THREADS});
+
+  caffe_gpu_histogram(n, blob.gpu_data(), hg.mutable_gpu_data(false));
+  const unsigned int *ph = hg.cpu_data();
+
+  double modev = 0.;
+//  double avg = 0., af = 0.;
+  unsigned mode = 0U;
+  for (unsigned int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
+
+    double v = (double)ph[i];
+//    if (v > 0.) {
+//      std::cout << i << " " << v << std::endl;
+//    }
+    if (v > modev) {
+      modev = v;
+      mode = i;
+    }
+  }
+  EXPECT_EQ(CAFFE_CUDA_NUM_THREADS / 2, mode);
+//
+//  std::cout << std::endl;
+//  std::cout << mode << std::endl;
+//
+//
+//
+}
+
+
 TYPED_TEST(GPUMathFunctionsTest, TestAmax) {
   int n = this->blob_bottom_->count();
   const TypeParam* x = this->blob_bottom_->cpu_data();

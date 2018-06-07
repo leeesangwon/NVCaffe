@@ -961,7 +961,7 @@ void Net::update_grad_scale() {
   if (global_grad_scale_enabled()) {
     if (global_grad_scale_adaptive_) {
       float wgn = wgrad_norms_.exchange(0LL) / GRAD_FACTOR;
-      wgn = wgn > 0.F ? 8.F - std::log2(wgn) : 0.F;
+      wgn = wgn > 0.F ? 2.F - std::log2(wgn) : 0.F;
 
 //      TBlob<unsigned int> hg;
 //      hg.Reshape(vector<int>{CAFFE_CUDA_NUM_THREADS});
@@ -989,16 +989,20 @@ void Net::update_grad_scale() {
 //            LOG(FATAL) << "Unsupported learnable type";
 //        }
         const unsigned int *ph = hg_.cpu_data();
-        float modev = 0.F;
-        int mode = 0U;
-        for (int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
-          float v = (float)ph[i];
+      unsigned int modev = 0U;
+        int mode = 0, mmin = 0, mmax = 0;
+        for (unsigned int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
+          unsigned int v = ph[i];
 
 
 
-//    if (v > 0.) {
+    if (v > 0.) {
+      if (mmin == 0) mmin = i;
+      mmax = i;
 //      std::cout << i << " " << v << std::endl;
-//    }
+    } else if (mmax > 0) {
+      break;
+    }
 
 
 
@@ -1007,10 +1011,10 @@ void Net::update_grad_scale() {
             mode = i;
           }
         }
-//        if (mode > 0) {
-//          mode = CAFFE_CUDA_NUM_THREADS / 2 - mode;
-//          LOG(INFO) << "$$$$$ " << mode << " " << wgn;
-//        }
+        if (mode > 0) {
+          mode = CAFFE_CUDA_NUM_THREADS / 2 - mode;
+          LOG(INFO) << "$$$$$ " << this << " " << mmin << " " << mmax << " " << mode << " " << wgn;
+        }
 //      }
 
 

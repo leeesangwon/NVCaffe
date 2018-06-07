@@ -533,12 +533,6 @@ __global__ void histogram_kernel<__half>(unsigned int N, const __half* x, unsign
   int i = threadIdx.x + blockIdx.x * blockDim.x;
   int offset = blockDim.x * gridDim.x;
   while (i < N) {
-
-
-//    printf("%g ", (float) *x);
-
-
-
     if (__hgt(x[i], 0)) {
       atomicAdd(shmem + (__half2int_rn(hlog2(x[i])) + CAFFE_CUDA_NUM_THREADS / 2), 1);
     }

@@ -314,8 +314,6 @@ class Net {
     return bytes;
   }
 
-  void add_wgrad_norm(float wgrad_norm, const Blob* param);
-
  protected:
   // Helpers for Init.
   /// @brief Append a new top blob to the net.
@@ -350,14 +348,7 @@ class Net {
     return tsize(learnable_params_[id]->diff_type());
   }
 
-//  {
-//    if (!std::isnan(wgrad_norm) && !std::isinf(wgrad_norm) && wgrad_norm > 0.F) {
-//      atomic_maximum(wgrad_norms_, std::llround(wgrad_norm * GRAD_FACTOR));
-//    }
-//    caffe_gpu_histogram(param->count(), param->gpu_diff<Dtype>(),
-//        hg_.mutable_gpu_data(false));
-//  }
-//  float wgrad_norm() const;
+  void update_wgrad_max(const Blob* param, int type_id, float current_scale);
 
   /// @brief The network name
   string name_;
@@ -446,14 +437,10 @@ class Net {
   NetParameter net_param_;
 
   size_t infer_count_;
-  mutable std::atomic_llong wgrad_norms_;
-  TBlob<unsigned int> hg_;
-  float global_grad_scale_coeff_, global_grad_scale_param_;
+  float wgrad_max_, global_grad_scale_coeff_, global_grad_scale_param_;
   bool global_grad_scale_adaptive_;
   /// Inner net runs on singe GPU (see recurrent layers)
   const bool inner_net_;
-
-  static constexpr float GRAD_FACTOR = 1.E9F;
 
   static constexpr int END_OF_ITERATION = -1;
   static constexpr int END_OF_TRAIN = -2;

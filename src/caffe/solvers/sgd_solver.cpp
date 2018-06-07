@@ -174,13 +174,13 @@ void SGDSolver<Dtype>::PrintRate(float rate) {
 
 // Note: this is asynchronous call
 template<typename Dtype>
-float SGDSolver<Dtype>::ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
+void SGDSolver<Dtype>::ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
     bool clear_grads) {
   if (normalize) {
     Normalize(param_id, handle);
   }
   Regularize(param_id);
-  return ComputeUpdateValue(param_id, handle, rate, clear_grads);
+  ComputeUpdateValue(param_id, handle, rate, clear_grads);
 }
 
 template<typename Dtype>
@@ -229,7 +229,7 @@ void sgd_reg_update_all_and_clear_gpu(int N,
     void* handle, bool clear_grads);
 
 template<typename Dtype>
-float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
+void SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
     bool clear_grads) {
   if (this->param_.debug_info()) {
     PrintParams(param_id);
@@ -237,11 +237,9 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
   Blob* param = this->net_->learnable_params()[param_id].get();
   TBlob<Dtype>* history = history_[param_id].get();
   float momentum = GetMomentum();
-  float wgrad_max = 0.F;
-
   const bool larc = this->param_.larc();
   const string& larc_policy = this->param_.larc_policy();
-  float local_rate = GetLocalRate(param_id, wgrad_max);
+  float local_rate = GetLocalRate(param_id);
   if (larc) {
     if (larc_policy == "scale") {
       local_rate = rate * local_rate;
@@ -254,12 +252,7 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
     local_rate = rate * local_rate;
   }
 
-
-  this->net_->add_wgrad_norm(wgrad_max, param);
-
-
   // Compute the update to history, then copy it to the parameter diff.
-
   if (Caffe::mode() == Caffe::CPU) {
     caffe_cpu_axpby<Dtype>(param->count(), local_rate, param->cpu_diff<Dtype>(), momentum,
         history->mutable_cpu_data());
@@ -305,20 +298,15 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_max;
 }
 
 template<typename Dtype>
-float SGDSolver<Dtype>::GetLocalRate(int param_id, float& wgrad_max) const {
+float SGDSolver<Dtype>::GetLocalRate(int param_id) const {
   const vector<float>& net_params_lr = this->net_->params_lr();
   float local_lr = net_params_lr[param_id];
   if (this->net_->global_grad_scale_enabled() || this->param_.larc()) {
     shared_ptr<Blob> param = this->net_->learnable_params()[param_id];
     const int type_id = net_->learnable_types()[0] == param->diff_type() ? 0 : 1;
-    wgrad_max = param->amax_diff(type_id);
-    if (std::isnan(wgrad_max) || std::isinf(wgrad_max)) {
-      wgrad_max = 0.F;  // skip this TODO warning
-    }
     if (this->param_.larc()) {
       const float wgrad_norm = std::sqrt(param->sumsq_diff(type_id));
       const float w_norm = std::sqrt(param->sumsq_data(type_id));

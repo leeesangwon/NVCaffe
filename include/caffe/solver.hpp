@@ -190,7 +190,7 @@ class Solver {
   virtual float GetLearningRate() = 0;
   virtual void ClipGradientsAndNormalize(void* handle, int type_id,
       const std::set<int>& param_ids) = 0;
-  virtual float ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
+  virtual void ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
       bool clear_grads) = 0;
 
  protected:

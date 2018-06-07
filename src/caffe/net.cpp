@@ -115,8 +115,7 @@ void Net::Init(const NetParameter& in_param) {
     LOG(INFO) << "Using " << Type_Name(default_bmath) << " as default backward math type";
   }
 
-  wgrad_norms_.store(0LL);
-  hg_.Reshape(vector<int>{CAFFE_CUDA_NUM_THREADS});
+  wgrad_max_ = 0.F;
   global_grad_scale_coeff_ = 1.F;
   global_grad_scale_param_ = in_param.global_grad_scale();
   global_grad_scale_adaptive_ = in_param.global_grad_scale_adaptive();
@@ -836,6 +835,13 @@ void Net::ReduceAndUpdate(int type_id) {
     if (param_id == END_OF_TRAIN) {
       break;
     }
+
+    if (param_id != END_OF_ITERATION &&
+        !is_precise(this->learnable_params()[param_id]->diff_type())) {
+      update_wgrad_max(this->learnable_params()[param_id].get(), type_id,
+          Caffe::solver_count() * global_grad_scale());
+    }
+
     if (rate < 0.F) {
       rate = solver_->GetLearningRate();
     }
@@ -846,23 +852,20 @@ void Net::ReduceAndUpdate(int type_id) {
           if (solver_->stop_reducing_requested(type_id)) {
             break;
           }
-          add_wgrad_norm(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads),
-              this->learnable_params()[param_id].get());
+          solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads);
           continue;
         }
       } else {
         if (!clip_grads) {
           this->learnable_params()[param_id]->scale_diff(1.F / global_grad_scale(), handle);
-          add_wgrad_norm(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads),
-              this->learnable_params()[param_id].get());
+          solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads);
         }
         continue;
       }
     } else if (clip_grads && Caffe::solver_count() == 1) {
       solver_->ClipGradientsAndNormalize(handle, type_id, au_ids);
       for (int i : au_ids) {
-        add_wgrad_norm(solver_->ApplyUpdate(i, handle, rate, false, clear_grads),
-            this->learnable_params()[i].get());
+        solver_->ApplyUpdate(i, handle, rate, false, clear_grads);
       }
       au_ids.clear();
     }
@@ -892,14 +895,11 @@ void Net::ReduceAndUpdate(int type_id) {
           if (solver_->stop_reducing_requested(type_id)) {
             break;
           }
-
           if (clip_grads) {
             solver_->ClipGradientsAndNormalize(handle, type_id, au_ids);
           }
-
           for (int i : au_ids) {
-            add_wgrad_norm(solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads),
-                this->learnable_params()[i].get());
+            solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads);
           }
           au_ids.erase(au_ids.find(id_from), au_ids.end());
         }
@@ -916,114 +916,23 @@ void Net::ReduceAndUpdate(int type_id) {
   DLOG(INFO) << print_current_device() << " Leaving ReduceAndUpdate thread " << lwp_id();
 }
 
-
-
-//float Net::wgrad_norm() const {
-//  return wgrad_norms_.exchange(0LL) / GRAD_FACTOR;
-//}
-
-void Net::add_wgrad_norm(float wgrad_norm, const Blob* param) {
-  if (!std::isnan(wgrad_norm) && !std::isinf(wgrad_norm) && wgrad_norm > 0.F) {
-    atomic_maximum(wgrad_norms_, std::llround(wgrad_norm * GRAD_FACTOR));
+void Net::update_wgrad_max(const Blob* param, int type_id, float current_scale) {
+  float wgrad_max = param->amax_diff(type_id) / current_scale;
+  if (std::isnan(wgrad_max) || std::isinf(wgrad_max)) {
+    wgrad_max = 0.F;  // skip this TODO warning
   }
-  const Type t = param->diff_type();
-  switch (t) {
-    case FLOAT:
-      caffe_gpu_histogram(param->count(), param->gpu_diff<float>(),
-          hg_.mutable_gpu_data(false));
-      break;
-    case FLOAT16:
-      caffe_gpu_histogram(param->count(), param->gpu_diff<float16>(),
-          hg_.mutable_gpu_data(false));
-      break;
-    case DOUBLE:
-      caffe_gpu_histogram(param->count(), param->gpu_diff<double>(),
-          hg_.mutable_gpu_data(false));
-      break;
-    default:
-      LOG(FATAL) << "Unsupported learnable type";
+  if (wgrad_max > wgrad_max_) {
+    wgrad_max_ = wgrad_max;
   }
-
-//  const unsigned int *ph = hg_.cpu_data();
-//  for (int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
-//    float v = (float)ph[i];
-//
-//    if (v > 0.) {
-//      std::cout << i << " " << v << std::endl;
-//    }
-//
-//  }
-
 }
 
 void Net::update_grad_scale() {
   global_grad_scale_coeff_ = 1.F;
   if (global_grad_scale_enabled()) {
     if (global_grad_scale_adaptive_) {
-      float wgn = wgrad_norms_.exchange(0LL) / GRAD_FACTOR;
-      wgn = wgn > 0.F ? 2.F - std::log2(wgn) : 0.F;
-
-//      TBlob<unsigned int> hg;
-//      hg.Reshape(vector<int>{CAFFE_CUDA_NUM_THREADS});
-//      for (int type_id = 0; type_id < learnable_types_.size(); ++type_id) {
-//        const Type t = (Type) learnable_types_[type_id];
-//        unsigned int lscnt = (unsigned int)(learnable_space_size_[type_id] / tsize(t));
-//        void* ptr = learnable_space_[type_id].data();
-//
-//        for (int j=0; j < 100; ++j) {
-//          const float16 *ppp = learnable_params_[j]->cpu_data<float16>();
-//          LOG(INFO) << "$$$$$ " << (float) ppp[0];
-//        }
-//
-//        switch (t) {
-//          case FLOAT:
-//            caffe_gpu_histogram(lscnt, reinterpret_cast<float*>(ptr), hg.mutable_gpu_data(false));
-//            break;
-//          case FLOAT16:
-//            caffe_gpu_histogram(lscnt, reinterpret_cast<float16*>(ptr), hg.mutable_gpu_data(false));
-//            break;
-//          case DOUBLE:
-//            caffe_gpu_histogram(lscnt, reinterpret_cast<double*>(ptr), hg.mutable_gpu_data(false));
-//            break;
-//          default:
-//            LOG(FATAL) << "Unsupported learnable type";
-//        }
-        const unsigned int *ph = hg_.cpu_data();
-      unsigned int modev = 0U;
-        int mode = 0, mmin = 0, mmax = 0;
-        for (unsigned int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
-          unsigned int v = ph[i];
-
-
-
-    if (v > 0.) {
-      if (mmin == 0) mmin = i;
-      mmax = i;
-//      std::cout << i << " " << v << std::endl;
-    } else if (mmax > 0) {
-      break;
-    }
-
-
-
-          if (v > modev) {
-            modev = v;
-            mode = i;
-          }
-        }
-        if (mode > 0) {
-          mode = CAFFE_CUDA_NUM_THREADS / 2 - mode;
-          LOG(INFO) << "$$$$$ " << this << " " << mmin << " " << mmax << " " << mode << " " << wgn;
-        }
-//      }
-
-
-      global_grad_scale_coeff_ =
-          std::pow(2.F, std::min(wgn, (float) mode)) * global_grad_scale_param_;
-        caffe_memset(hg_.count() * sizeof(unsigned int), 0, hg_.mutable_cpu_data(false));
-
-        //hg_.set_data(0);
-
+      const float f = wgrad_max_ > 0.F ? 4.F / wgrad_max_ : 1.F;
+      global_grad_scale_coeff_ = f * global_grad_scale_param_;
+      wgrad_max_ = 0.F;
     } else {
       global_grad_scale_coeff_ = global_grad_scale_param_;
     }

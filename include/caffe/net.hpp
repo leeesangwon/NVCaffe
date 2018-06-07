@@ -292,6 +292,7 @@ class Net {
     return inner_net_;
   }
 
+  void update_wgrad_max(const Blob* param, int type_id);
   void update_grad_scale();
 
   std::string print_current_device() const {
@@ -347,8 +348,6 @@ class Net {
   size_t lp_size(int id) const {
     return tsize(learnable_params_[id]->diff_type());
   }
-
-  void update_wgrad_max(const Blob* param, int type_id, float current_scale);
 
   /// @brief The network name
   string name_;

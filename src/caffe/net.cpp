@@ -836,12 +836,6 @@ void Net::ReduceAndUpdate(int type_id) {
       break;
     }
 
-    if (param_id != END_OF_ITERATION &&
-        !is_precise(this->learnable_params()[param_id]->diff_type())) {
-      update_wgrad_max(this->learnable_params()[param_id].get(), type_id,
-          Caffe::solver_count() * global_grad_scale());
-    }
-
     if (rate < 0.F) {
       rate = solver_->GetLearningRate();
     }
@@ -916,8 +910,8 @@ void Net::ReduceAndUpdate(int type_id) {
   DLOG(INFO) << print_current_device() << " Leaving ReduceAndUpdate thread " << lwp_id();
 }
 
-void Net::update_wgrad_max(const Blob* param, int type_id, float current_scale) {
-  float wgrad_max = param->amax_diff(type_id) / current_scale;
+void Net::update_wgrad_max(const Blob* param, int type_id) {
+  float wgrad_max = param->amax_diff(type_id);
   if (std::isnan(wgrad_max) || std::isinf(wgrad_max)) {
     wgrad_max = 0.F;  // skip this TODO warning
   }

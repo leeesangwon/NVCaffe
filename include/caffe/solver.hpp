@@ -187,7 +187,7 @@ class Solver {
    */
   virtual const char* type() const { return ""; }
   virtual void PrintRate(float rate = 0) {}
-  virtual float GetLearningRate() = 0;
+  virtual float GetLearningRate() const = 0;
   virtual void ClipGradientsAndNormalize(void* handle, int type_id,
       const std::set<int>& param_ids) = 0;
   virtual void ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
@@ -219,7 +219,7 @@ class Solver {
   int iter_;
   int id_;
   float total_lapse_;
-  int current_step_;
+  mutable int current_step_;
   shared_ptr<Net> net_;
   vector<shared_ptr<Net>> test_nets_;
   Callback* callback_;

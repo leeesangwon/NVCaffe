@@ -21,7 +21,7 @@ namespace caffe {
 // where base_lr, max_iter, gamma, step, stepvalue and power are defined
 // in the solver parameter protocol buffer, and iter is the current iteration.
 template<typename Dtype>
-float SGDSolver<Dtype>::GetLearningRate() {
+float SGDSolver<Dtype>::GetLearningRate() const {
   float rate;
   const string& lr_policy = this->param_.lr_policy();
   if (this->iter_ < this->param_.rampup_interval()) {
@@ -68,7 +68,7 @@ float SGDSolver<Dtype>::GetLearningRate() {
 }
 
 template<typename Dtype>
-float SGDSolver<Dtype>::GetMomentum() {
+float SGDSolver<Dtype>::GetMomentum() const {
   float moment;
   float base_momentum = this->param_.momentum();
   const string& momentum_policy = this->param_.momentum_policy();
@@ -100,7 +100,7 @@ float SGDSolver<Dtype>::GetWeightDecay() const {
   float weight_decay = wd;
   if (wd_policy == "poly") {
     float power = this->param_.weight_decay_power();
-    weight_decay = wd * pow(float(this->iter_)/this->param_.max_iter(), power);
+    weight_decay = wd * pow(1.f - float(this->iter_)/this->param_.max_iter(), power);
   }
   return weight_decay;
 }
@@ -167,8 +167,10 @@ void SGDSolver<Dtype>::PrintRate(float rate) {
     }
     float moment = GetMomentum();
     float wd = GetWeightDecay();
-    LOG(INFO) << "Iteration " << this->iter_ << ", lr = " << rate << ", m = " << moment
-              << ", wd = " << wd  << ", gs = " << f_round2(net_->global_grad_scale());
+    LOG(INFO) << "Iteration " << this->iter_
+        << ", lr = " << rate << ", m = " << moment
+        << ", lrm = " << rate / (1.F- moment)
+        << ", wd = " << wd  << ", gs = " << f_round2(net_->global_grad_scale());
   }
 }
 
@@ -314,9 +316,10 @@ float SGDSolver<Dtype>::GetLocalRate(int param_id) const {
       const float wgrad_norm = std::sqrt(param->sumsq_diff(type_id));
       const float w_norm = std::sqrt(param->sumsq_data(type_id));
       const float gw_ratio = this->param_.larc_eta();
+      const float momentum = this->GetMomentum();
       float rate = 1.F;
       if (w_norm > 0.F && wgrad_norm > 0.F) {
-        rate = gw_ratio * w_norm / wgrad_norm;
+        rate = (1.F - momentum) * gw_ratio * w_norm / wgrad_norm;
       }
       if (local_lr > 0.) {
         local_lr = rate;

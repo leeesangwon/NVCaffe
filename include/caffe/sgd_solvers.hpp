@@ -27,14 +27,14 @@ class SGDSolver : public Solver {
 
   const char* type() const override { return "SGD"; }
   const vector<shared_ptr<TBlob<Dtype> > >& history() { return history_; }
-  float GetLearningRate() override;
+  float GetLearningRate() const override;
   void ClipGradientsAndNormalize(void* handle, int type_id,
       const std::set<int>& param_ids) override;
   void PrintRate(float rate = 0) override;
 
  protected:
   void PreSolve();
-  float GetMomentum();
+  float GetMomentum() const;
   float GetWeightDecay() const;
   float GetLocalRate(int param_id) const;
   float local_decay(int param_id) const;

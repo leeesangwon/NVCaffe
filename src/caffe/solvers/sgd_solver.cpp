@@ -167,7 +167,8 @@ void SGDSolver<Dtype>::PrintRate(float rate) {
     }
     float moment = GetMomentum();
     float wd = GetWeightDecay();
-    LOG(INFO) << "Iteration " << this->iter_
+    LOG_IF(INFO, rank_ == 0) << net_->print_current_device()
+        << " Iteration " << this->iter_
         << ", lr = " << rate << ", m = " << moment
         << ", lrm = " << rate / (1.F- moment)
         << ", wd = " << wd  << ", gs = " << f_round2(net_->global_grad_scale());

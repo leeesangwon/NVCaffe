@@ -96,7 +96,7 @@ class Net {
    * a forward pass, e.g. to compute output feature size.
    */
   void Reshape();
-  void ReduceAndUpdate(int type_id);
+  void ReduceAndUpdate();
 
   float ForwardBackward(bool apply_update = true);
 
@@ -294,14 +294,7 @@ class Net {
 
   void update_wgrad_max(const Blob* param, int type_id);
   void update_grad_scale();
-
-  std::string print_current_device() const {
-    std::ostringstream os;
-    os << (phase_ == TRAIN ? "[" : "(")
-       << Caffe::current_device()
-       << (phase_ == TRAIN ? "]" : ")");
-    return os.str();
-  }
+  std::string print_current_device() const;
 
   template <typename Ftype, typename Btype>
   size_t prefetch_bytes() {
@@ -336,10 +329,10 @@ class Net {
   /// @brief Helper for displaying debug info in Update.
   void UpdateDebugInfo(const int param_id);
   /// @brief Multi-GPU reduction for a particular parameter.
-  void Reduce(int type_id, int param_id);
+  void Reduce(int param_id);
   /// @brief Multi-GPU reduction for a particular bucket of parameters.
-  void ReduceBucket(int type_id, size_t count, Type bucket_type, void* bucket);
-  size_t received_contiguous_count(int type_id, const std::set<int>& au_ids, int& from);
+  void ReduceBucket(size_t count, Type bucket_type, void* bucket);
+  size_t received_contiguous_count(int type_id, const std::set<int>& au_ids, int& from) const;
 
   size_t lp_aligned_count(int id) const {
     return align_up<6>((size_t)learnable_params_[id]->count());
@@ -430,7 +423,7 @@ class Net {
   /// Pointer to the solver being used with this net
   Solver* solver_;
   size_t solver_rank_;
-  BlockingQueue<int> reduction_queue_[2];
+  BlockingQueue<int> reduction_queue_;
   Flag* solver_init_flag_;
   vector<Flag*> layer_inititialized_flags_;
   NetParameter net_param_;

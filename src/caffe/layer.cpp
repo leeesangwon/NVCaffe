@@ -1,5 +1,6 @@
 #include "caffe/solver.hpp"
 #include "caffe/layer.hpp"
+#include "caffe/parallel.hpp"
 
 namespace caffe {
 
@@ -94,9 +95,12 @@ int LayerBase::parent_rank() const {
 
 std::string LayerBase::print_current_device() const {
   std::ostringstream os;
-  os << (phase_ == TRAIN ? "[" : "(")
-      << Caffe::current_device()
-      << (phase_ == TRAIN ? "]" : ")");
+  os << (phase_ == TRAIN ? "[" : "(");
+  if (P2PManager::global_count() > 0) {
+    os << P2PManager::global_rank() << ".";
+  }
+  os << Caffe::current_device()
+     << (phase_ == TRAIN ? "]" : ")");
   return os.str();
 }
 

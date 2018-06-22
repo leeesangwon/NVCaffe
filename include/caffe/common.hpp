@@ -426,14 +426,17 @@ class Caffe {
   static int solver_count() {
     return solver_count_;
   }
+  static int device_per_host_count() {
+    return (int)gpus_.size();
+  }
   static void set_solver_count(int val) {
     if (solver_count_ != val) {
       std::lock_guard<std::mutex> lock(caffe_mutex_);
       solver_count_ = val;
     }
   }
-  static bool root_solver() { return Get().root_solver_; }
-  static void set_root_solver(bool val) { Get().root_solver_ = val; }
+  static bool root_solver() { return Get().is_root_solver_; }
+  static void set_root_solver(bool val) { Get().is_root_solver_ = val; }
   static int restored_iter() { return restored_iter_; }
   static void set_restored_iter(int val);
 
@@ -510,7 +513,7 @@ class Caffe {
 #endif
 
   shared_ptr<RNG> random_generator_;
-  bool root_solver_;
+  bool is_root_solver_;
   const int device_;
 
   // Default device chosen by a user and associated with the main thread.

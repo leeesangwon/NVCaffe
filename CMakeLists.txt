@@ -6,6 +6,11 @@ if(POLICY CMP0054)
   cmake_policy(SET CMP0054 NEW)
 endif()
 
+if(USE_MPI)
+  set(CMAKE_C_COMPILER "mpicc")
+  set(CMAKE_CXX_COMPILER "mpic++")
+endif()
+
 # ---[ Caffe project
 project(Caffe C CXX)
 
@@ -56,6 +61,7 @@ caffe_option(USE_LMDB "Build with lmdb" ON)
 caffe_option(TEST_FP16 "Build Caffe Tests with 16 bit mode included" OFF)
 caffe_option(NO_NVML "Build Caffe Tests without NVML (i.e. no CPU affinity)" OFF)
 caffe_option(USE_TRT "Build with TensorRT support" OFF)
+caffe_option(USE_MPI "Build with MPI support" OFF)
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "^aarch")
   # Tegra

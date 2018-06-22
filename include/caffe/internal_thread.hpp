@@ -61,7 +61,6 @@ class InternalThread {
  protected:
   int target_device_;
   size_t rank_;
-  void* aux_;
 
   /* Implement this method in your subclass
       with the code you want your thread to run. */

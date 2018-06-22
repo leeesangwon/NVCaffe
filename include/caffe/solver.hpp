@@ -94,7 +94,7 @@ class Solver {
     return total_lapse_;
   }
   bool is_root() const {
-    return rank_ == 0;
+    return root_solver_ == nullptr;
   }
   int rank() const {
     return rank_;
@@ -105,12 +105,12 @@ class Solver {
   // Invoked at specific points during an iteration
   class Callback {
    public:
-    virtual void allreduce(int type_id, int param_id) = 0;
-    virtual void allreduce_bucket(int type_id, size_t count, void* bucket, Type type) = 0;
+    virtual void allreduce(int param_id) = 0;
+    virtual void allreduce_bucket(size_t count, void* bucket, Type type) = 0;
     virtual void soft_barrier() = 0;
-    virtual void reduce_barrier(int type_id) = 0;
     virtual void saveTestResults(float loss, const vector<float>& scores) = 0;
     virtual void aggregateTestResults(float* loss, vector<float>* scores) = 0;
+    virtual cudaStream_t comm_stream() const = 0;
 
    protected:
     virtual void on_start(const vector<shared_ptr<Blob>>& net) = 0;
@@ -127,32 +127,25 @@ class Solver {
     root_callbacks_.push_back(value);
   }
 
-  Flag iter_flag_[2];
+  Flag iter_flag_;
 
-  void iteration_complete_signal(int ltype) {
-    iter_flag_[ltype].set();
+  void iteration_complete_signal() {
+    iter_flag_.set();
   }
-  void iteration_start_signal(int ltype) {
-    iter_flag_[ltype].reset();
+  void iteration_start_signal() {
+    iter_flag_.reset();
   }
-  void iteration_wait(int ltype) {
-    iter_flag_[ltype].wait();
+  void iteration_wait() {
+    iter_flag_.wait();
   }
-  void iteration_cancel(int ltype) {
-    iter_flag_[ltype].disarm();
+  void iteration_cancel() {
+    iter_flag_.disarm();
   }
-  void stop_reducing(int ltype) const {
-    if (ltype == 0) {
-      reduce_thread0_->interrupt();
-      return;
-    }
-    reduce_thread1_->interrupt();
+  void stop_reducing() const {
+    reduce_thread_->interrupt();
   }
-  bool stop_reducing_requested(int ltype) const {
-    if (ltype == 0) {
-      return reduce_thread0_ && reduce_thread0_->interruption_requested();
-    }
-    return reduce_thread1_ && reduce_thread1_->interruption_requested();
+  bool stop_reducing_requested() const {
+    return reduce_thread_->interruption_requested();
   }
 
   void CheckSnapshotWritePermissions();
@@ -160,10 +153,8 @@ class Solver {
 
   void request_early_exit() {
     requested_early_exit_ = true;
-    for (int type_id = 0; type_id < net_->learnable_types().size(); ++type_id) {
-      stop_reducing(type_id);
-      iteration_complete_signal(type_id);
-    }
+    stop_reducing();
+    iteration_complete_signal();
   }
 
   bool display() const {
@@ -206,7 +197,7 @@ class Solver {
   virtual void RestoreSolverStateFromBinaryProto(const string& state_file) = 0;
   void UpdateSmoothedLoss(float loss, int start_iter, int average_loss);
   void Reduce(Callback* callback, int device, Caffe::Brew mode, uint64_t rand_seed,
-      int solver_count, bool root_solver, int type_id);
+      int solver_count, bool root_solver);
 
   void callback_soft_barrier() {
     if (callback_ != nullptr) {
@@ -226,8 +217,7 @@ class Solver {
   vector<Callback*> root_callbacks_;
   vector<float> losses_;
   float smoothed_loss_;
-  unique_ptr<boost::thread> reduce_thread0_;
-  unique_ptr<boost::thread> reduce_thread1_;
+  unique_ptr<boost::thread> reduce_thread_;
 
   // The root solver that holds root nets (actually containing shared layers)
   // in data parallelism

@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "caffe/common.hpp"
+#include "caffe/parallel.hpp"
 #include "caffe/util/device_alternate.hpp"
 #include "caffe/util/gpu_memory.hpp"
 #include "caffe/util/rng.hpp"
@@ -120,6 +121,7 @@ void Caffe::set_restored_iter(int val) {
 }
 
 void GlobalInit(int* pargc, char*** pargv) {
+  P2PManager::Init(pargc, pargv);
   // Google flags.
   ::gflags::ParseCommandLineFlags(pargc, pargv, true);
   // Google logging.
@@ -137,7 +139,7 @@ int Caffe::device_count() {
 Caffe::Caffe()
     : curand_generator_(nullptr),
       random_generator_(),
-      root_solver_(true),
+      is_root_solver_(true),
       device_(current_device()) {
   init();
 }
@@ -547,8 +549,11 @@ void setCpuAffinity(int device) {
     LOG(ERROR) << "NVML failed to set CPU affinity on device " << device
                << ", thread " << lwp_id();
   } else {
-    LOG(INFO) << "NVML succeeded to set CPU affinity on device " << device
-               << ", thread " << lwp_id();
+    LOG(INFO) << "{"
+#ifdef USE_MPI
+       << P2PManager::global_rank() << "."
+#endif
+       << device << "} NVML succeeded to set CPU affinity";
   }
 }
 

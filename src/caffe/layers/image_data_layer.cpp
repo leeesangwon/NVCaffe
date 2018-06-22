@@ -6,6 +6,7 @@
 #include "caffe/solver.hpp"
 #include "caffe/layers/image_data_layer.hpp"
 #include "caffe/util/rng.hpp"
+#include "caffe/parallel.hpp"
 
 #define IDL_CACHE_PROGRESS 0.05F
 
@@ -62,7 +63,7 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
       (new_height > 0 && new_width > 0)) << "Current implementation requires "
       "new_height and new_width to be set at the same time.";
 
-  if (this->rank_ == 0) {
+  if (Caffe::root_solver()) {
     // Read the file with filenames and labels
     lines.clear();
     const string &source = image_data_param.source();
@@ -94,9 +95,10 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
       CHECK_GT(lines.size(), skip) << "Not enough points to skip";
     }
   }
+  const size_t universal_threads = this->threads_num() * P2PManager::global_count();
   line_ids_.resize(this->threads_num());
   for (size_t i = 0; i < this->threads_num(); ++i) {
-    line_ids_[i] = this->rank_ * this->threads_num() + i + skip;
+    line_ids_[i] = this->rank_ * universal_threads + i + skip;
   }
 
   // Read an image, and use it to initialize the top blob.
@@ -169,7 +171,8 @@ bool ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   vector<std::pair<std::string, int>>& lines = lines_[id_];
 
   size_t line_id = line_ids_[thread_id];
-  const size_t line_bucket = Caffe::gpus().size() * this->threads_num();
+  const size_t line_bucket = Caffe::gpus().size() * this->threads_num() *
+      P2PManager::global_count();
   const size_t lines_size = lines.size();
   // Reshape according to the first image of each batch
   // on single input batches allows for inputs of varying dimension.

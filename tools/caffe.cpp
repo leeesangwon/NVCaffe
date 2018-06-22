@@ -10,6 +10,7 @@ namespace bp = boost::python;
 #include <boost/algorithm/string.hpp>
 
 #include "caffe/caffe.hpp"
+#include "caffe/parallel.hpp"
 #include "caffe/util/signal_handler.h"
 #include "caffe/util/bbox_util.hpp"
 
@@ -238,7 +239,9 @@ int train() {
         GetRequestedAction(FLAGS_sigint_effect),
         GetRequestedAction(FLAGS_sighup_effect));
 
-  shared_ptr<caffe::Solver> solver(caffe::SolverRegistry::CreateSolver(solver_param, nullptr, 0));
+  shared_ptr<caffe::Solver> solver(
+      caffe::SolverRegistry::CreateSolver(solver_param, nullptr,
+          gpus.size() * caffe::P2PManager::global_rank()));
   solver->SetActionFunction(signal_handler.GetActionFunction());
 
   if (FLAGS_snapshot.size()) {
@@ -248,9 +251,10 @@ int train() {
     CopyLayers(solver.get(), FLAGS_weights);
   }
 
-  if (gpus.size() > 1) {
-    Caffe::set_solver_count(gpus.size());
-    caffe::P2PManager p2p_mgr(solver, gpus.size(), solver->param());
+  if (gpus.size() > 1 || caffe::P2PManager::global_count() > 1) {
+    const int rank_count = (int)gpus.size() * caffe::P2PManager::global_count();
+    Caffe::set_solver_count(rank_count);
+    caffe::P2PManager p2p_mgr(solver, rank_count, (int)gpus.size(), solver->param());
     p2p_mgr.Run(gpus);
   } else {
     LOG(INFO) << "Starting Optimization";
@@ -264,7 +268,9 @@ int train() {
       LOG(INFO) << os.str();
     }
   }
-  LOG(INFO) << "Optimization Done in " << Caffe::time_from_init();
+  if (caffe::P2PManager::global_rank() == 0) {
+    LOG(INFO) << "Optimization Done in " << Caffe::time_from_init();
+  }
   return 0;
 }
 RegisterBrewFunction(train);

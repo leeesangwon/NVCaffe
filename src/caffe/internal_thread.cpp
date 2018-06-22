@@ -10,13 +10,16 @@ namespace caffe {
 InternalThread::InternalThread(int target_device, size_t rank, size_t threads, bool delayed)
     : target_device_(target_device),
       rank_(rank),
-      aux_(nullptr),
       threads_(threads),
       delay_flags_(threads, make_shared<Flag>(!delayed)) {}
 
 void InternalThread::StartInternalThread(bool set_cpu_affinity, uint64_t random_seed) {
   CHECK(!is_started()) << "Threads should persist and not be restarted.";
-  LOG(INFO) << "Starting " << threads_.size() << " internal thread(s) on device " << target_device_;
+  LOG(INFO) <<
+#ifdef USE_MPI
+    "{" << P2PManager::global_rank() << "} "
+#endif
+    "Starting " << threads_.size() << " internal thread(s) on device " << target_device_;
   Caffe::Brew mode = Caffe::mode();
   if (mode == Caffe::GPU) {
     CHECK_GE(target_device_, 0);

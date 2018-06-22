@@ -44,10 +44,6 @@ struct GPUMemory {
     return mgr_.try_allocate(ptr, size, device, pstream);
   }
 
-  static shared_mutex& read_write_mutex() {
-    return mutex_;
-  }
-
   // Scope initializes global Memory Manager for a given scope.
   // It's instantiated in test(), train() and time() Caffe brewing functions
   // as well as in unit tests main().
@@ -167,7 +163,6 @@ struct GPUMemory {
     static const size_t MAX_CACHED_SIZE;  ///< 2^MAX_BIN
   };
 
-  static shared_mutex mutex_;
   static mutex ws_mutex_init_;
   static Manager mgr_;
   static const int INVALID_DEVICE;  ///< Default is invalid: CUB takes care

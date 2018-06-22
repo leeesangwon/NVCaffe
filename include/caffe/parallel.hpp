@@ -76,7 +76,7 @@ class P2PManager {
     return global_count_;
   }
 
-  static const string& host_name() {
+  static const char* host_name() {
     return host_name_;
   }
 
@@ -92,7 +92,7 @@ class P2PManager {
 
   static int global_rank_;
   static int global_count_;
-  static std::string host_name_;
+  static char host_name_[_POSIX_HOST_NAME_MAX + 1];
 };
 
 // Synchronous data parallelism using map-reduce between local GPUs.

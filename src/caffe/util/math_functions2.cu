@@ -506,8 +506,7 @@ void caffe_gpu_eltwise_min<float16>(const int N,
 }
 
 template<typename Dtype>
-__global__ void histogram_kernel(unsigned int N, const Dtype* x, unsigned int *h)
-{
+__global__ void histogram_kernel(unsigned int N, const Dtype* x, unsigned int *h) {
   __shared__ unsigned int shmem[CAFFE_CUDA_NUM_THREADS];
   shmem[threadIdx.x] = 0;
   __syncthreads();
@@ -525,8 +524,7 @@ __global__ void histogram_kernel(unsigned int N, const Dtype* x, unsigned int *h
 }
 
 template<>
-__global__ void histogram_kernel<__half>(unsigned int N, const __half* x, unsigned int *h)
-{
+__global__ void histogram_kernel<__half>(unsigned int N, const __half* x, unsigned int *h) {
   __shared__ unsigned int shmem[CAFFE_CUDA_NUM_THREADS];
   shmem[threadIdx.x] = 0;
   __syncthreads();

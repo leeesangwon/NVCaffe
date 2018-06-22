@@ -417,7 +417,8 @@ bool Solver::Solve(const char* resume_file) {
   requested_early_exit_ = false;
 
   if (resume_file != nullptr) {
-    LOG(INFO) << net_->print_current_device() << "Restoring previous solver status from " << resume_file;
+    LOG(INFO) << net_->print_current_device()
+              << "Restoring previous solver status from " << resume_file;
     Restore(resume_file);
   }
   callback_soft_barrier();

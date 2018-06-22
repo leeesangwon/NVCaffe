@@ -15,7 +15,7 @@ namespace caffe {
 
 int P2PManager::global_rank_  = 0;
 int P2PManager::global_count_ = 1;
-string P2PManager::host_name_;
+char P2PManager::host_name_[_POSIX_HOST_NAME_MAX + 1];
 
 void P2PManager::Init(int *argc, char ***argv) {
 #ifdef USE_MPI
@@ -38,10 +38,8 @@ void P2PManager::Init(int *argc, char ***argv) {
 //  }
 #endif
 #endif
-  char hostname[_POSIX_HOST_NAME_MAX + 1];
-  hostname[_POSIX_HOST_NAME_MAX] = '\0';
-  gethostname(hostname, _POSIX_HOST_NAME_MAX);
-  host_name_.assign(hostname);
+  host_name_[_POSIX_HOST_NAME_MAX] = '\0';
+  gethostname(host_name_, _POSIX_HOST_NAME_MAX);
 
   LOG(INFO) << "P2PManager::Init"
 #ifdef USE_MPI

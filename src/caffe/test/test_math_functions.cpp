@@ -215,9 +215,7 @@ TYPED_TEST_CASE(GPUMathFunctionsTest, TestDtypes);
 
 
 TYPED_TEST(GPUMathFunctionsTest, TestHistogram) {
-
   TBlob<TypeParam> blob;
-
   blob.Reshape(11, 117, 119, 123);
   // fill the values
   FillerParameter filler_param;
@@ -232,26 +230,15 @@ TYPED_TEST(GPUMathFunctionsTest, TestHistogram) {
   const unsigned int *ph = hg.cpu_data();
 
   double modev = 0.;
-//  double avg = 0., af = 0.;
   unsigned mode = 0U;
   for (unsigned int i = 0; i < CAFFE_CUDA_NUM_THREADS; ++i) {
-
     double v = (double)ph[i];
-//    if (v > 0.) {
-//      std::cout << i << " " << v << std::endl;
-//    }
     if (v > modev) {
       modev = v;
       mode = i;
     }
   }
   EXPECT_EQ(CAFFE_CUDA_NUM_THREADS / 2, mode);
-//
-//  std::cout << std::endl;
-//  std::cout << mode << std::endl;
-//
-//
-//
 }
 
 

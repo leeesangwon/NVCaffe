@@ -27,7 +27,8 @@ and workspace for convolutional layers.
 * **Multi-GPU test phase** for even memory load across multiple GPUs.
 * **Backward compatibility with BVLC Caffe and NVCaffe 0.15 and higher**.
 * **Extended set of optimized models** (including 16 bit floating point examples).
-
+* _Experimental feature (no official support)_ **Multi-node training** (since 0.17.1, NCCL 2.2 and OpenMPI 2 required).
+* _Experimental feature (no official support)_ **TRTLayer** (since 0.17.1, can be used as inference plugin).
 
 ## License and Citation
 

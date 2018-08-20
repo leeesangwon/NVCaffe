@@ -231,8 +231,7 @@ int train() {
     solver_param.set_device_id(gpus[0]);
     Caffe::set_mode(Caffe::GPU);
     Caffe::set_gpus(gpus);
-    Caffe::set_solver_count(gpus.size());
-    CHECK_EQ(gpus.size(), Caffe::solver_count());
+    Caffe::set_solver_count(gpus.size() * caffe::P2PManager::global_count());
   }
 
   caffe::SignalHandler signal_handler(
@@ -252,9 +251,7 @@ int train() {
   }
 
   if (gpus.size() > 1 || caffe::P2PManager::global_count() > 1) {
-    const int rank_count = (int)gpus.size() * caffe::P2PManager::global_count();
-    Caffe::set_solver_count(rank_count);
-    caffe::P2PManager p2p_mgr(solver, rank_count, (int)gpus.size(), solver->param());
+    caffe::P2PManager p2p_mgr(solver, Caffe::solver_count(), (int)gpus.size(), solver->param());
     p2p_mgr.Run(gpus);
   } else {
     LOG(INFO) << "Starting Optimization";

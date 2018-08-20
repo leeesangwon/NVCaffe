@@ -24,11 +24,10 @@ void InternalThread::StartInternalThread(bool set_cpu_affinity, uint64_t random_
   if (mode == Caffe::GPU) {
     CHECK_GE(target_device_, 0);
   }
-  const int solver_count = Caffe::solver_count();
   try {
     for (size_t id = 0; id < threads_.size(); ++id) {
       threads_[id] = boost::thread(&InternalThread::entry, this, id, target_device_, mode,
-          random_seed, solver_count, rank_, set_cpu_affinity);
+          random_seed, rank_, set_cpu_affinity);
     }
   } catch (std::exception& e) {
     LOG(FATAL) << "Thread exception: " << e.what();
@@ -45,7 +44,6 @@ void InternalThread::RestartAllThreads(size_t new_threads, bool delayed, bool se
   if (mode == Caffe::GPU) {
     CHECK_GE(target_device_, 0);
   }
-  const int solver_count = Caffe::solver_count();
   threads_.clear();
   delay_flags_.clear();
   threads_.resize(new_threads);
@@ -55,7 +53,7 @@ void InternalThread::RestartAllThreads(size_t new_threads, bool delayed, bool se
       CHECK(!is_started(id));
       delay_flags_[id] = make_shared<Flag>(!delayed);
       threads_[id] = boost::thread(&InternalThread::entry, this, id,
-          target_device_, mode, random_seed, solver_count, rank_, set_cpu_affinity);
+          target_device_, mode, random_seed, rank_, set_cpu_affinity);
     }
   } catch (std::exception& e) {
     LOG(FATAL) << "Thread exception: " << e.what();
@@ -63,7 +61,7 @@ void InternalThread::RestartAllThreads(size_t new_threads, bool delayed, bool se
 }
 
 void InternalThread::entry(int thread_id, int device, Caffe::Brew mode, uint64_t random_seed,
-    int solver_count, size_t rank, bool set_cpu_affinity) {
+    size_t rank, bool set_cpu_affinity) {
   delay_flags_[thread_id]->wait();
   if (mode == Caffe::GPU) {
     CHECK_GE(device, 0);
@@ -76,7 +74,6 @@ void InternalThread::entry(int thread_id, int device, Caffe::Brew mode, uint64_t
   }
   Caffe::set_mode(mode);
   Caffe::set_random_seed(random_seed);
-  Caffe::set_solver_count(solver_count);
 
   DLOG(INFO) << "Started internal thread " << lwp_id()
             << " on device " << device << ", rank " << rank_;

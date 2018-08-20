@@ -46,9 +46,10 @@ void Solver::Init() {
   CHECK_GE(param_.average_loss(), 1) << "average_loss should be non-negative.";
   CheckSnapshotWritePermissions();
   if (Caffe::root_solver()) {  // P2PSync does other solvers if they exist
-    Caffe::set_root_seed(static_cast<uint64_t>(param_.random_seed()));
+    Caffe::set_root_seed(static_cast<uint64_t>(param_.random_seed() + P2PManager::global_rank()));
   }
   // Scaffolding code
+  GPUMemory::InitWorkspaces();
   InitTrainNet();
   InitTestNets();
   LOG(INFO) << "Solver scaffolding done.";
@@ -189,7 +190,6 @@ void Solver::Step(int iters) {
   losses_.clear();
   smoothed_loss_ = 0;
   const Caffe::Brew mode = Caffe::mode();
-  const int solver_count = Caffe::solver_count();
   const bool root_solver = this->is_root();
 
   net_->set_solver(this);
@@ -211,7 +211,7 @@ void Solver::Step(int iters) {
     b->current_mutable_data_memory(true);
   }
 
-  if (solver_count > 1) {
+  if (Caffe::solver_count() > 1) {
     // we need to sync all threads before starting, otherwise some cuda init,
     // malloc or other cuda stuff could interlock with in-loop cuda GPU sync
     // called in on_start.
@@ -222,9 +222,9 @@ void Solver::Step(int iters) {
   }
 
   uint64_t random_seed = param_.random_seed() >= 0 ?
-      static_cast<uint64_t>(param_.random_seed()) : Caffe::next_seed();
+      static_cast<uint64_t>(param_.random_seed() + P2PManager::global_rank()) : Caffe::next_seed();
   reduce_thread_.reset(new boost::thread(&Solver::Reduce, this, callback(),
-      Caffe::current_device(), mode, random_seed, solver_count, root_solver));
+      Caffe::current_device(), mode, random_seed, root_solver));
 
   size_t epoch_count = 0UL;
   unsigned int bps = net_->batch_per_solver();
@@ -240,8 +240,10 @@ void Solver::Step(int iters) {
     }  // we clean them in ApplyUpdate otherwise
 
     bool test_and_snapshot = false;
-    if (test_and_snapshot_enabled &&
-        (iter_ + 1 == stop_iter || (epochs > 0. && epochs_passed + ts_epochs_remaining > epochs))) {
+    if (test_and_snapshot_enabled
+         && ((epochs > 0.
+         && epochs_passed + ts_epochs_remaining >= epochs)
+        || (epochs == 0. && iter_ + 1 == stop_iter && ts_epochs_remaining > 0))) {
       --ts_epochs_remaining;
       test_and_snapshot = true;
     }
@@ -249,7 +251,7 @@ void Solver::Step(int iters) {
 
     // Just started or restored?
     const bool first_loop = iter_ == 0 || iterations_last_ < 0;
-    const bool use_multi_gpu_testing = Caffe::solver_count() > 1;
+    const bool use_multi_gpu_testing = Caffe::device_in_use_per_host_count() > 1;
       const string mgpu_str = use_multi_gpu_testing ? "[MultiGPU] " : "";
       if (iter_ == 0) {
         LOG_IF(INFO, rank_ == 0) << mgpu_str << "Initial Test started...";
@@ -316,7 +318,7 @@ void Solver::Step(int iters) {
     }
     // average the loss across iterations for smoothed reporting
     UpdateSmoothedLoss(loss, start_iter, average_loss);
-    if (this->param_display() && (display || rel_iter <= 2 || iter_ + 1 >= stop_iter)) {
+    if (this->param_display() && (display || rel_iter <= 2 || iter_ + 1 == stop_iter)) {
       float lapse = iteration_timer_->Seconds();
       iteration_timer_->Start();
 
@@ -329,14 +331,16 @@ void Solver::Step(int iters) {
         total_lapse_ += lapse;
         float per_s = (iter_ - iterations_last_) / (lapse > 0.F ? lapse : 1.F);
         LOG_IF(INFO, rank_ == 0) << "    " << net_->print_current_device()
-                                     << " Iteration " << iter_
+                                     << " Iteration "
+                                     << (iter_ + 1 == stop_iter ? stop_iter : iter_)
                                      << " (" << per_s << " iter/s, " << lapse << "s/"
                                      << (iter_ - iterations_last_) << " iter), "
                                      << os_ep.str() << "loss = "
                                      << smoothed_loss_;
       } else {
         LOG_IF(INFO, rank_ == 0) << "    " << net_->print_current_device()
-                                           << " Iteration " << iter_
+                                           << " Iteration "
+                                           << (iter_ + 1 == stop_iter ? stop_iter : iter_)
                                            << " (" << lapse << " s), "
                                            << os_ep.str() << "loss = " << smoothed_loss_;
       }
@@ -395,7 +399,7 @@ void Solver::Finalize() {
 }
 
 void Solver::Reduce(Callback* callback, int device, Caffe::Brew mode, uint64_t random_seed,
-    int solver_count, bool root_solver) {
+    bool root_solver) {
   set_callback(callback);
   if (mode == Caffe::GPU) {
     CUDA_CHECK(cudaSetDevice(device));
@@ -405,7 +409,6 @@ void Solver::Reduce(Callback* callback, int device, Caffe::Brew mode, uint64_t r
   }
   Caffe::set_mode(mode);
   Caffe::set_random_seed(random_seed);
-  Caffe::set_solver_count(solver_count);
   Caffe::set_root_solver(root_solver);
   net_->ReduceAndUpdate();
 }
@@ -463,7 +466,7 @@ bool Solver::Solve(const char* resume_file) {
         << iter_ << ", loss = " << smoothed_loss_;
   }
   if (param_.test_interval() && iter_ > 0 && iter_ % param_.test_interval() == 0) {
-    bool use_multi_gpu_testing = Caffe::solver_count() > 1;
+    bool use_multi_gpu_testing = Caffe::device_in_use_per_host_count() > 1;
     TestAll(0, use_multi_gpu_testing);
     callback_soft_barrier();
   }
@@ -494,7 +497,8 @@ vector<float> Solver::TestAll(const int iters, bool use_multi_gpu) {
 
 // Returns a score for net output #0 or negative value if interrupted
 vector<float> Solver::Test(const int test_net_id, const int iters, bool use_multi_gpu) {
-  LOG_IF(INFO, rank_ == 0) << "Iteration " << iter_
+  LOG_IF(INFO, rank_ == 0) << "Iteration "
+      << (iter_ + 1 == param_.max_iter() ? param_.max_iter() : iter_)
             << ", Testing net (#" << test_net_id << ")";
   if (!test_nets_[test_net_id]->trained_layers_shared()) {
     CHECK_NOTNULL(test_nets_[test_net_id].get())->ShareTrainedLayersWith(net_.get());

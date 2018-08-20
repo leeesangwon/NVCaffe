@@ -105,8 +105,8 @@ class DataReader : public InternalThread {
 
  public:
   DataReader(const LayerParameter& param,
-      size_t solver_count,
-      size_t solver_rank,
+      size_t local_solver_count,
+      size_t local_solver_rank,
       size_t parser_threads_num,
       size_t transf_threads_num,
       size_t queue_depth,
@@ -175,7 +175,7 @@ class DataReader : public InternalThread {
   const size_t parser_threads_num_, transf_threads_num_;
   const size_t queues_num_, queue_depth_;
   string db_source_;
-  const size_t solver_count_, solver_rank_;
+  const size_t local_solver_count_, local_solver_rank_;
   size_t batch_size_;
   const bool skip_one_batch_;
   DataParameter_DB backend_;

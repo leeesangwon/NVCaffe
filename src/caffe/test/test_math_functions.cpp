@@ -213,7 +213,7 @@ TYPED_TEST_CASE(GPUMathFunctionsTest, TestDtypes);
   //  EXPECT_EQ(reference_distance, computed_distance);
   //  }
 
-
+#if false
 TYPED_TEST(GPUMathFunctionsTest, TestHistogram) {
   TBlob<TypeParam> blob;
   blob.Reshape(11, 117, 119, 123);
@@ -240,7 +240,7 @@ TYPED_TEST(GPUMathFunctionsTest, TestHistogram) {
   }
   EXPECT_EQ(CAFFE_CUDA_NUM_THREADS / 2, mode);
 }
-
+#endif
 
 TYPED_TEST(GPUMathFunctionsTest, TestAmax) {
   int n = this->blob_bottom_->count();

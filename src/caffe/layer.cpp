@@ -97,9 +97,10 @@ std::string LayerBase::print_current_device() const {
   std::ostringstream os;
   os << (phase_ == TRAIN ? "[" : "(");
   if (P2PManager::global_count() > 0) {
-    os << P2PManager::global_rank() << ".";
+    os << "n" << P2PManager::global_rank() << ".";
   }
-  os << Caffe::current_device()
+  os << "d" << Caffe::current_device()
+     << ".r" << (parent_net() == nullptr ? "?" : std::to_string(parent_rank()))
      << (phase_ == TRAIN ? "]" : ")");
   return os.str();
 }

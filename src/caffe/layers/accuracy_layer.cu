@@ -18,14 +18,13 @@ __global__ void AccuracyForwardGPU(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
-    const Dtype prob_of_true_class = bottom_data[n * dim
-                                                 + label_value * spatial_dim
-                                                 + s];
-    int num_better_predictions = -1;  // true_class also counts as "better"
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       acc[index] = 0;
       counts[index] = 0;
     } else {
+      int num_better_predictions = -1;  // true_class also counts as "better"
+      const Dtype prob_of_true_class = bottom_data[idx];
       for (int k = 0; k < num_labels & num_better_predictions < top_k; k++) {
         num_better_predictions +=
           (bottom_data[n * dim + k * spatial_dim + s] >= prob_of_true_class);
@@ -47,13 +46,12 @@ __global__ void AccuracyForwardWithPerClassGPU(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
-    const Dtype prob_of_true_class = bottom_data[n * dim
-                                                 + label_value * spatial_dim
-                                                 + s];
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       // nothing to be done.
     } else {
       int num_better_predictions = -1;  // true_class also counts as "better"
+      const Dtype prob_of_true_class = bottom_data[idx];
       for (int k = 0; k < num_labels & num_better_predictions < top_k; k++) {
         num_better_predictions +=
           (bottom_data[n * dim + k * spatial_dim + s] >= prob_of_true_class);
@@ -85,7 +83,7 @@ void AccuracyLayer<Ftype, Btype>::Forward_gpu(
     // NOLINT_NEXT_LINE(whitespace/operators)
     AccuracyForwardGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>>(nthreads, bottom_data, bottom_label,
-        acc_data, outer_num_, dim, inner_num_, num_labels, top_k_,
+        acc_data, bottom[0]->count(), dim, inner_num_, num_labels, top_k_,
         has_ignore_label_, ignore_label_, counts);
     CUDA_CHECK(cudaStreamSynchronize(stream));
     Ftype acc;
@@ -110,7 +108,7 @@ void AccuracyLayer<Ftype, Btype>::Forward_gpu(
     // NOLINT_NEXT_LINE(whitespace/operators)
     AccuracyForwardWithPerClassGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>>(nthreads, bottom_data, bottom_label,
-        acc_data, counts, outer_num_, dim, inner_num_, num_labels, top_k_,
+        acc_data, counts, bottom[0]->count(), dim, inner_num_, num_labels, top_k_,
         has_ignore_label_, ignore_label_);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 

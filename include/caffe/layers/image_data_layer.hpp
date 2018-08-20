@@ -53,15 +53,15 @@ class ImageDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
     return this->phase_ == TRAIN ? &layer_inititialized_flag_ : nullptr;
   }
 
-  static size_t id(const string& ph, const string& name);
   cv::Mat next_mat(const string& root_folder, const string& filename, int height, int width,
-                   bool is_color, int short_side);
+                   bool is_color, int short_side, bool& from_cache);
 
   const size_t id_;  // per layer per phase
   shared_ptr<Caffe::RNG> prefetch_rng_;
   Flag layer_inititialized_flag_;
   size_t epoch_count_;
   vector<size_t> line_ids_;
+
   static vector<vector<std::pair<std::string, int>>> lines_;  // per id_
   static vector<unordered_map<std::string, cv::Mat>> cache_;
   static vector<std::mutex> cache_mutex_;

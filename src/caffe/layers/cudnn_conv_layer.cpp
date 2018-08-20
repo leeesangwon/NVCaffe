@@ -58,7 +58,7 @@ cudnnDataType_t convolutionDescDataType(cudnnConvolutionDescriptor_t conv) {
 template <typename Ftype, typename Btype>
 void CuDNNConvolutionLayer<Ftype, Btype>::LayerSetUp(
     const vector<Blob*>& bottom, const vector<Blob*>& top) {
-  GPUMemory::Init();
+  GPUMemory::InitWorkspaces();
   ConvolutionLayer<Ftype, Btype>::LayerSetUp(bottom, top);
   // Initialize algorithm arrays
   fwd_algo_.resize(bottom.size());
@@ -846,7 +846,7 @@ void CuDNNConvolutionLayer<Ftype, Btype>::FindExConvAlgo(
       os << " " << f_round2(bdtime) << " " << f_round2(bftime);
     }
 
-    LOG(INFO) << os.str();
+    LOG_IF(INFO, P2PManager::global_rank() == 0) << os.str();
   }
 }
 

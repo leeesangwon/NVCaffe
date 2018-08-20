@@ -17,12 +17,12 @@ __global__ void SoftmaxLossForwardGPU(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       loss[index] = 0;
       counts[index] = 0;
     } else {
-      loss[index] = -log(max(prob_data[n * dim + label_value * spatial_dim + s],
-          min_dtype<Dtype>()));
+      loss[index] = -log(max(prob_data[idx], min_dtype<Dtype>()));
       counts[index] = 1;
     }
   }
@@ -39,12 +39,12 @@ __global__ void SoftmaxLossForwardGPU<half>(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(__half2float(label[n * spatial_dim + s]));
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       loss[index].setx(0U);
       counts[index].setx(0U);
     } else {
-      loss[index] = float2half_clip(- log(max(__half2float(
-          prob_data[n * dim + label_value * spatial_dim + s]), minh)));
+      loss[index] = float2half_clip(- log(max(__half2float(prob_data[idx]), minh)));
       counts[index].setx(0x3c00U);  // set to 1
     }
   }
@@ -68,13 +68,13 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_gpu(
     SoftmaxLossForwardGPU<half><<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>>(nthreads, reinterpret_cast<const half*>(prob_data),
         reinterpret_cast<const half*>(label), reinterpret_cast<half*>(loss_data),
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_,
+        prob_->count(), dim, inner_num_, has_ignore_label_, ignore_label_,
         reinterpret_cast<half*>(counts));
   } else {
     // NOLINT_NEXT_LINE(whitespace/operators)
     SoftmaxLossForwardGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>> (nthreads, prob_data, label, loss_data,
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_, counts);
+        prob_->count(), dim, inner_num_, has_ignore_label_, ignore_label_, counts);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   float loss;
@@ -103,14 +103,15 @@ __global__ void SoftmaxLossBackwardGPU(const int nthreads, const Dtype* top,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
+    const int idx = n * dim + label_value * spatial_dim + s;
 
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       for (int c = 0; c < channels; ++c) {
         bottom_diff[n * dim + c * spatial_dim + s] = 0;
       }
       counts[index] = 0;
     } else {
-      bottom_diff[n * dim + label_value * spatial_dim + s] -= p1;
+      bottom_diff[idx] -= p1;
       counts[index] = 1;
     }
   }
@@ -127,14 +128,14 @@ __global__ void SoftmaxLossBackwardGPU<half>(const int nthreads, const half* top
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(__half2float(label[n * spatial_dim + s]));
+    const int idx = n * dim + label_value * spatial_dim + s;
 
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       for (int c = 0; c < channels; ++c) {
         bottom_diff[n * dim + c * spatial_dim + s].setx(0U);
       }
       counts[index].setx(0U);
     } else {
-      const int idx = n * dim + label_value * spatial_dim + s;
       bottom_diff[idx] = float2half_clip(__half2float(bottom_diff[idx]) - p1);
       counts[index].setx(0x3c00U);  // 1.
     }
@@ -165,7 +166,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
     // NOLINT_NEXT_LINE(whitespace/operators)
     SoftmaxLossBackwardGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, Caffe::thread_stream()>>>(nthreads, top_data, label, bottom_diff,
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_, counts,
+        bottom[0]->count(), dim, inner_num_, has_ignore_label_, ignore_label_, counts,
         (Btype)label_smoothing_);
     CUDA_CHECK(cudaStreamSynchronize(Caffe::thread_stream()));
 

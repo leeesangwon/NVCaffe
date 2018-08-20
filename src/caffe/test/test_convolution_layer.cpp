@@ -1102,13 +1102,14 @@ TYPED_TEST(CuDNNConvolutionLayerTest, TestGradientCuDNN) {
   this->blob_top_vec_.push_back(this->blob_top_2_);
   // convolution_param->set_cudnn_convolution_algo_seeker(
   // ConvolutionParameter_CuDNNConvolutionAlgorithmSeeker_FINDEX);
+  convolution_param->set_conv_algos_override("1,1,1");
   convolution_param->add_kernel_size(3);
   convolution_param->add_stride(2);
   convolution_param->set_num_output(2);
   convolution_param->mutable_weight_filler()->set_type("gaussian");
   convolution_param->mutable_bias_filler()->set_type("gaussian");
   CuDNNConvolutionLayer<TypeParam, TypeParam> layer(layer_param);
-  GradientChecker<TypeParam> checker(tol<TypeParam>(3e-2, 1e-1), tol<TypeParam>(1e-2, 5e-1));
+  GradientChecker<TypeParam> checker(tol<TypeParam>(4e-3, 1e-1), tol<TypeParam>(1e-3, 5e-1));
   checker.CheckGradientExhaustive(&layer, this->blob_bottom_vec_, this->blob_top_vec_);
 }
 

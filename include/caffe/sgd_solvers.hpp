@@ -36,7 +36,6 @@ class SGDSolver : public Solver {
   void PreSolve();
   float GetMomentum() const;
   float GetWeightDecay() const;
-  float GetLocalRate(int param_id) const;
   float local_decay(int param_id) const;
 
   void ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
@@ -44,6 +43,7 @@ class SGDSolver : public Solver {
   void Normalize(int param_id, void* handle);
   void Regularize(int param_id);
 
+  virtual float GetLocalRate(int param_id);
   virtual void ComputeUpdateValue(int param_id, void* handle, float rate, bool clear_grads);
   virtual void SnapshotSolverState(const string& model_filename);
   virtual void SnapshotSolverStateToBinaryProto(const string& model_filename);
@@ -57,6 +57,8 @@ class SGDSolver : public Solver {
   // temp maintains other information that might be needed in computation
   //   of gradients/updates and is not needed in snapshots
   vector<shared_ptr<TBlob<Dtype> > > history_, update_, temp_;
+
+  vector<float> larc_g_corr_;
 
   DISABLE_COPY_MOVE_AND_ASSIGN(SGDSolver);
 };
@@ -171,6 +173,23 @@ class AdamSolver : public SGDSolver<Dtype> {
   void ComputeUpdateValue(int param_id, void* handle, float rate, bool clear_grads) override;
 
   DISABLE_COPY_MOVE_AND_ASSIGN(AdamSolver);
+};
+
+template <typename Dtype>
+class SAGSolver : public SGDSolver<Dtype> {
+ public:
+  explicit SAGSolver(const SolverParameter& param,
+                     size_t rank = 0U, Solver *root_solver = NULL)
+      : SGDSolver<Dtype>(param, rank, root_solver) { }
+  explicit SAGSolver(const string& param_file,
+                     size_t rank = 0U, Solver *root_solver = NULL)
+      : SGDSolver<Dtype>(param_file, rank, root_solver) {  }
+  virtual inline const char* type() const { return "SAG"; }
+
+ protected:
+  void ComputeUpdateValue(int param_id, void* handle, float rate, bool clear_grads) override;
+  float GetLocalRate(int param_id) override;
+  DISABLE_COPY_MOVE_AND_ASSIGN(SAGSolver);
 };
 
 }  // namespace caffe

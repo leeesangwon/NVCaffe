@@ -401,7 +401,7 @@ void Net::Init(const NetParameter& in_param) {
   learnable_space_size_[0] = 0UL;
   learnable_space_size_[1] = 0UL;
   reduce_buckets_ = (size_t) in_param.reduce_buckets();
-  if (Caffe::device_count() > 0) {
+  if (Caffe::device_in_use_per_host_count() > 0) {
     LOG_IF(INFO, Caffe::root_solver())
         << "Top memory (" << Phase_Name(phase_) << ") required for data: "
         << gpu_top_memory_data_use_ << " diff: " << gpu_top_memory_diff_use_;
@@ -835,7 +835,7 @@ void Net::ReduceAndUpdate() {
     }
     cublasHandle_t handle = Caffe::cublas_handle(1);
     CHECK_GE(reduce_buckets_, 0);
-    if (Caffe::device_per_host_count() > 1 && reduce_buckets_ > 0) {
+    if (Caffe::device_in_use_per_host_count() > 1 && reduce_buckets_ > 0) {
       bucket_size = align_up<6>(learnable_space_size_[type_id] / reduce_buckets_);
     }
 
@@ -948,23 +948,31 @@ void Net::update_grad_scale() {
 }
 
 void Net::Reduce(int param_id) {
+  this->learnable_params()[param_id]->scale_diff(1.F / global_grad_scale(),  // TODO
+      Caffe::cublas_handle(1));
+#ifdef USE_NCCL
   Solver::Callback* cb = solver_->callback();
   NCCL_CHECK(ncclGroupStart());
   cb->allreduce(param_id);
   NCCL_CHECK(ncclGroupEnd());
   CUDA_CHECK(cudaStreamSynchronize(cb->comm_stream()));
-  this->learnable_params()[param_id]->scale_diff(1.F /
-      (Caffe::solver_count() * global_grad_scale()), Caffe::cublas_handle(1));
+#endif
+  this->learnable_params()[param_id]->scale_diff(1.F / Caffe::solver_count(),
+      Caffe::cublas_handle(1));
 }
 
 void Net::ReduceBucket(size_t count, Type bucket_type, void* bucket) {
+  Tensor::gpu_scal(count, bucket_type, bucket, 1.F / global_grad_scale(),
+      Caffe::cublas_handle(1));
+#ifdef USE_NCCL
   Solver::Callback* cb = solver_->callback();
   NCCL_CHECK(ncclGroupStart());
   cb->allreduce_bucket(count, bucket, bucket_type);
   NCCL_CHECK(ncclGroupEnd());
   CUDA_CHECK(cudaStreamSynchronize(cb->comm_stream()));
-  Tensor::gpu_scal(count, bucket_type, bucket, 1.F /
-      (Caffe::solver_count() * global_grad_scale()), Caffe::cublas_handle(1));
+#endif
+  Tensor::gpu_scal(count, bucket_type, bucket, 1.F / Caffe::solver_count(),
+      Caffe::cublas_handle(1));
 }
 
 void Net::ForwardDebugInfo(const int layer_id) {

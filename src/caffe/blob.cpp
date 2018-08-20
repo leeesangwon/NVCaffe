@@ -129,6 +129,30 @@ bool Blob::IsSharedDiffCycled(const vector<Blob*>& others) {
   return false;
 }
 
+bool Blob::IsSharedCycled(const vector<Blob*>& others) {
+  std::unordered_set<const Blob*> node_set;
+  for (auto other : others) {
+    const Blob *data_shared_with = other->data_shared_with_;
+    const Blob *diff_shared_with = other->diff_shared_with_;
+    while (data_shared_with != nullptr ||
+           diff_shared_with != nullptr) {
+      if ((data_shared_with != nullptr && node_set.count(data_shared_with) > 0) ||
+          (diff_shared_with != nullptr && node_set.count(diff_shared_with) > 0)) {
+        return true;
+      }
+      if (data_shared_with != nullptr) {
+        node_set.insert({data_shared_with});
+        data_shared_with = data_shared_with->data_shared_with_;
+      }
+      if (diff_shared_with != nullptr) {
+        node_set.insert({diff_shared_with});
+        diff_shared_with = diff_shared_with->diff_shared_with_;
+      }
+    }
+  }
+  return false;
+}
+
 // The "update" method is used for parameter blobs in a Net, which are stored
 // as TBlob<float> or TBlob<double> -- hence we do not define it for
 // TBlob<int> or TBlob<unsigned int>.

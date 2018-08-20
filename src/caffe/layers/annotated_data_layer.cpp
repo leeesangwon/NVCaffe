@@ -35,8 +35,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
   if (this->auto_mode()) {
     if (!sample_areader_) {
       sample_areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-          Caffe::solver_count(),
-          this->rank_,
+          Caffe::device_in_use_per_host_count(),
+          this->rank_ % Caffe::device_in_use_per_host_count(),
           this->parsers_num_,
           this->threads_num(),
           batch_size,
@@ -47,8 +47,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
           false);
     } else if (!areader_) {
       areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-          Caffe::solver_count(),
-          this->rank_,
+          Caffe::device_in_use_per_host_count(),
+          this->rank_ % Caffe::device_in_use_per_host_count(),
           this->parsers_num_,
           this->threads_num(),
           batch_size,
@@ -60,8 +60,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
     }
   } else if (!areader_) {
     areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-        Caffe::solver_count(),
-        this->rank_,
+        Caffe::device_in_use_per_host_count(),
+        this->rank_ % Caffe::device_in_use_per_host_count(),
         this->parsers_num_,
         this->threads_num(),
         batch_size,

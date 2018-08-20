@@ -74,7 +74,7 @@ class InternalThread {
   }
 
  private:
-  void entry(int thread_id, int device, Caffe::Brew mode, uint64_t rand_seed, int solver_count,
+  void entry(int thread_id, int device, Caffe::Brew mode, uint64_t rand_seed,
       size_t rank, bool set_cpu_affinity);
 
   vector<boost::thread> threads_;

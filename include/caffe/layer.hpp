@@ -141,6 +141,9 @@ class LayerBase {
   Net* parent_net() {
     return parent_net_;
   }
+  const Net* parent_net() const {
+    return parent_net_;
+  }
 
   const Solver* parent_solver() const;
 

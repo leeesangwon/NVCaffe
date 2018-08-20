@@ -2,13 +2,13 @@
 #include <glog/logging.h>
 #include <boost/thread.hpp>
 #include <boost/thread/latch.hpp>
-#include <nccl.h>
 
 #include "caffe/caffe.hpp"
 #include "caffe/parallel.hpp"
 
 #ifdef USE_NCCL
 #include "caffe/util/nccl.hpp"
+#define CAFFE_NCCL_VER (NCCL_MAJOR*10000 + NCCL_MINOR*100)
 #endif
 
 namespace caffe {
@@ -19,11 +19,11 @@ char P2PManager::host_name_[_POSIX_HOST_NAME_MAX + 1];
 
 void P2PManager::Init(int *argc, char ***argv) {
 #ifdef USE_MPI
-  int provided = 0;
-  MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
+  MPI_Init(argc, argv);
+//  int provided = 0;
+//  MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
 //  if (provided < MPI_THREAD_MULTIPLE)
-//  {
-//    std::cerr << "ERROR: The MPI library does not have full thread support" << std::endl;
+//  {std::cerr << "ERROR: The MPI library does not have full thread support" << std::endl;
 //    MPI_Abort(MPI_COMM_WORLD, 1);
 //  }
   MPI_Comm_rank(MPI_COMM_WORLD, &global_rank_);
@@ -33,7 +33,7 @@ void P2PManager::Init(int *argc, char ***argv) {
 //            << " ready for attach" << std::endl;
 //  int i = 0;
 //  while (0 == i) {
-//    sleep(5);
+//    sleep(30);
 //    MPI_Bcast((void*) &i, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
 //  }
 #endif
@@ -57,14 +57,14 @@ P2PManager::P2PManager(shared_ptr<Solver> root_solver,
       bar_(devices) {
 #ifndef USE_NCCL
   LOG(FATAL) << "USE_NCCL must be specified for multi-GPU mode";
-#endif
+#else
+  LOG_IF(FATAL, CAFFE_NCCL_VER < 20200) << "NCCL 2.2 or higher is required";
   if (global_rank_ == 0) {
     NCCL_CHECK(ncclGetUniqueId(&nccl_id_));
   }
+#endif
 #ifdef USE_MPI
-  if (P2PManager::global_count() > 1) {
-    MPI_Bcast(&nccl_id_, sizeof(nccl_id_), MPI_BYTE, 0, MPI_COMM_WORLD);
-  }
+  MPI_Bcast(&nccl_id_, sizeof(nccl_id_), MPI_BYTE, 0, MPI_COMM_WORLD);
 #endif
 }
 
@@ -98,7 +98,8 @@ void P2PManager::Run(const vector<int>& gpus) {
   LOG(INFO) << "Starting Optimization";
 
   for (int i = 0; i < syncs_.size(); ++i) {
-    syncs_[i]->StartInternalThread(true, static_cast<uint64_t>(param.random_seed()));
+    syncs_[i]->StartInternalThread(true, static_cast<uint64_t>(param.random_seed() +
+                                                               P2PManager::global_rank()));
   }
   for (int i = 0; i < syncs_.size(); ++i) {
     syncs_[i]->WaitAll();
@@ -108,7 +109,8 @@ void P2PManager::Run(const vector<int>& gpus) {
   os.precision(4);
   float total_perf = this->root_solver_->perf_report(os, syncs_[0]->target_device_);
   if (P2PManager::global_count() > 1) {
-    LOG(INFO) << "Node {" << P2PManager::global_rank() << "} root " << os.str();
+    LOG_IF(INFO, P2PManager::global_rank() == 0)
+        << "Node {" << P2PManager::global_rank() << "} root " << os.str();
   } else {
     LOG(INFO) << "Root " << os.str();
   }
@@ -117,7 +119,8 @@ void P2PManager::Run(const vector<int>& gpus) {
     os.precision(4);
     total_perf += syncs_[i]->solver_->perf_report(os, syncs_[i]->target_device_, 5 /* "Root " */);
     if (P2PManager::global_count() > 1) {
-      LOG(INFO) << "Node {" << P2PManager::global_rank() << "} " << os.str();
+      LOG_IF(INFO, P2PManager::global_rank() == 0)
+          << "Node {" << P2PManager::global_rank() << "} " << os.str();
     } else {
       LOG(INFO) << os.str();
     }
@@ -160,7 +163,7 @@ P2PSync::P2PSync(P2PManager* mgr, shared_ptr<Solver> root_solver,
   LOG(FATAL) << "USE_NCCL := 1 must be specified for multi-GPU";
 #endif
   CHECK_EQ(target_device_, solver_param_.device_id());
-  LOG(INFO) << "[" << rank << " - " << this->target_device_ << "] P2pSync adding callback";
+  LOG(INFO) << "[" << rank << " - " << this->target_device_ << "] P2PSync adding callback";
 }
 
 P2PSync::~P2PSync() {
@@ -307,7 +310,7 @@ void P2PSync::saveTestResults(float loss, const vector<float>& scores) {
 }
 
 uint32_t batch_per_gpu(uint32_t total) {
-  int device_count = Caffe::device_per_host_count();
+  int device_count = Caffe::device_in_use_per_host_count();
   if (total == 0 || total % device_count != 0) {
     uint32_t new_total = total + (device_count - (total % device_count));
     LOG(WARNING) << "Batch size must be divisible by the number of solvers (GPUs): "

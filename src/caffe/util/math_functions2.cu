@@ -505,6 +505,7 @@ void caffe_gpu_eltwise_min<float16>(const int N,
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
+#if false
 template<typename Dtype>
 __global__ void histogram_kernel(unsigned int N, const Dtype* x, unsigned int *h) {
   __shared__ unsigned int shmem[CAFFE_CUDA_NUM_THREADS];
@@ -562,5 +563,6 @@ void caffe_gpu_histogram<float16>(unsigned int N, const float16* x, unsigned int
 
 template void caffe_gpu_histogram<float>(unsigned int N, const float* x, unsigned int* h);
 template void caffe_gpu_histogram<double>(unsigned int N, const double* x, unsigned int* h);
+#endif
 
 }  // namespace caffe

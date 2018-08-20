@@ -163,7 +163,7 @@ struct GPUMemory {
     static const size_t MAX_CACHED_SIZE;  ///< 2^MAX_BIN
   };
 
-  static mutex ws_mutex_init_;
+  static std::mutex ws_mutex_init_, dev_info_mutex_;
   static Manager mgr_;
   static const int INVALID_DEVICE;  ///< Default is invalid: CUB takes care
 
@@ -175,7 +175,7 @@ struct GPUMemory {
   // This one is for TRAIN only:
   static vector<shared_ptr<Workspace>> weights_workspace_;
 
-  static void Init();
+  static void InitWorkspaces();
 
   static const int WS_INITIAL_SIZE;
 };

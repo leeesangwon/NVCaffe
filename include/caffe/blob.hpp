@@ -544,6 +544,7 @@ class Blob {
 
   static bool IsSharedDataCycled(const vector<Blob*>& others);
   static bool IsSharedDiffCycled(const vector<Blob*>& others);
+  static bool IsSharedCycled(const vector<Blob*>& others);
 
   DISABLE_COPY_MOVE_AND_ASSIGN(Blob);
 

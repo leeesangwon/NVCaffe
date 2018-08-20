@@ -28,7 +28,7 @@ float SGDSolver<Dtype>::GetLearningRate() const {
   CHECK_GE(min_lr, 0.F);
   if (this->iter_ < this->param_.rampup_interval()) {
     float alpha = float(this->iter_) / this->param_.rampup_interval();
-    float rampup_lr = 0.;
+    float rampup_lr = 0.F;
     if (this->param_.has_rampup_lr()) {
       rampup_lr = this->param_.rampup_lr();
     }
@@ -37,9 +37,9 @@ float SGDSolver<Dtype>::GetLearningRate() const {
     rate = this->param_.base_lr();
   } else if (lr_policy == "step") {
     this->current_step_ = this->iter_ / this->param_.stepsize();
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->current_step_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->current_step_);
   } else if (lr_policy == "exp") {
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->iter_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->iter_);
   } else if (lr_policy == "inv") {
     rate = this->param_.base_lr() *
            pow(1.F + this->param_.gamma() * float(this->iter_), -this->param_.power());
@@ -50,7 +50,7 @@ float SGDSolver<Dtype>::GetLearningRate() const {
       LOG(INFO) << "MultiStep Status: Iteration " << this->iter_ << ", step = "
                 << this->current_step_;
     }
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->current_step_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->current_step_);
   } else if (lr_policy == "poly") {
     float base_lr = this->param_.base_lr();
     CHECK_GE(base_lr, min_lr);

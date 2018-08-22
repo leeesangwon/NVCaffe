@@ -411,6 +411,7 @@ void Solver::Reduce(Callback* callback, int device, Caffe::Brew mode, uint64_t r
   Caffe::set_random_seed(random_seed);
   Caffe::set_root_solver(root_solver);
   net_->ReduceAndUpdate();
+  Caffe::Delete();
 }
 
 bool Solver::Solve(const char* resume_file) {

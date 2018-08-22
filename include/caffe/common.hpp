@@ -317,6 +317,7 @@ class Caffe {
   // including boost/thread.hpp to avoid a boost/NVCC issues (#1009, #1010)
   // on OSX. Also fails on Linux with CUDA 7.0.18.
   static Caffe& Get();
+  static void Delete();
 
   enum Brew { CPU, GPU };
 

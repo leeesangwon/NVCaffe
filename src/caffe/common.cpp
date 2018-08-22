@@ -65,6 +65,19 @@ Caffe& Caffe::Get() {
   return *emp_pair.first->second.get();
 }
 
+void Caffe::Delete() {
+  std::uint64_t utid = lwp_dev_id();
+  std::lock_guard<std::mutex> lock(caffe_mutex_);
+  auto it = thread_instance_map_.find(utid);
+  if (it != thread_instance_map_.end()) {
+    --thread_count_;
+    DLOG(INFO) << "[" << current_device()
+               << "] Caffe instance " << it->second.get()
+               << " deleted, count " << thread_count_ << ", thread " << lwp_id() << ", tid " << utid;
+    thread_instance_map_.erase(it);
+  }
+}
+
 // random seeding
 uint64_t cluster_seedgen(void) {
   uint64_t s, seed, pid;
@@ -530,7 +543,7 @@ void setCpuAffinity(int device) {
   static NVMLInit nvml_init_;
 
   char pciBusId[16];
-  CUDA_CHECK(cudaDeviceGetPCIBusId(pciBusId, 16, device));
+  CUDA_CHECK(cudaDeviceGetPCIBusId(pciBusId, 15, device));
   nvmlDevice_t nvml_device;
 
   if (nvmlDeviceGetHandleByPciBusId(pciBusId, &nvml_device) != NVML_SUCCESS ||

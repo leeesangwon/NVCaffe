@@ -58,7 +58,7 @@ cudnnDataType_t convolutionDescDataType(cudnnConvolutionDescriptor_t conv) {
 template <typename Ftype, typename Btype>
 void CuDNNConvolutionLayer<Ftype, Btype>::LayerSetUp(
     const vector<Blob*>& bottom, const vector<Blob*>& top) {
-  GPUMemory::Init();
+  GPUMemory::InitWorkspaces();
   ConvolutionLayer<Ftype, Btype>::LayerSetUp(bottom, top);
   // Initialize algorithm arrays
   fwd_algo_.resize(bottom.size());
@@ -277,8 +277,8 @@ size_t CuDNNConvolutionLayer<Ftype, Btype>::AllocateWorkspace(size_t bottom_size
     CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(handle,
         fwd_bottom_descs_[i], fwd_filter_desc_, fwd_conv_descs_[i], fwd_top_descs_[i],
         fwd_algo_[i], &(workspace_fwd_sizes_[i])));
+    CUDA_CHECK(cudaStreamSynchronize(Caffe::thread_stream(0)));
   }
-  CUDA_CHECK(cudaStreamSynchronize(Caffe::thread_stream(0)));
 
   for (int i = 0; i < bottom_size; ++i) {
     if (this->phase_ == TRAIN) {
@@ -306,16 +306,17 @@ void CuDNNConvolutionLayer<Ftype, Btype>::Reshape(
   if (initialized_cached_descs_) {
     // Check whether bottom and conv descriptors have changed,
     // which then requires a new reshape and set algo.
-    if (IsBottomDescChanged(bottom, true) || IsBottomDescChanged(bottom, false) ||
-        IsConvDescChanged(bottom, true) || IsConvDescChanged(bottom, false)) {
+    if (IsBottomDescChanged(bottom, true) ||
+        (this->phase_ == TRAIN && IsBottomDescChanged(bottom, false)) ||
+        IsConvDescChanged(bottom, true) ||
+        (this->phase_ == TRAIN && IsConvDescChanged(bottom, false))) {
       use_reshape_ = true;
     } else {
       // When no reshape is needed, setting algo may be still needed
       // (for example, if we are at iteration 1).
       // If we want to set algos, we have to use reshape in
       // current implementation.
-      // Also, after 2 runs we have to release some space if it's not needed.
-      use_reshape_ = use_algo_seeker_ || ok_to_release();
+      use_reshape_ = use_algo_seeker_;
     }
   } else {
     // If cached descriptors are not initialized yet, need to
@@ -845,7 +846,7 @@ void CuDNNConvolutionLayer<Ftype, Btype>::FindExConvAlgo(
       os << " " << f_round2(bdtime) << " " << f_round2(bftime);
     }
 
-    LOG(INFO) << os.str();
+    LOG_IF(INFO, P2PManager::global_rank() == 0) << os.str();
   }
 }
 

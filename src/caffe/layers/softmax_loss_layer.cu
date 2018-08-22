@@ -17,12 +17,12 @@ __global__ void SoftmaxLossForwardGPU(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       loss[index] = 0;
       counts[index] = 0;
     } else {
-      loss[index] = -log(max(prob_data[n * dim + label_value * spatial_dim + s],
-          min_dtype<Dtype>()));
+      loss[index] = -log(max(prob_data[idx], min_dtype<Dtype>()));
       counts[index] = 1;
     }
   }
@@ -39,12 +39,12 @@ __global__ void SoftmaxLossForwardGPU<half>(const int nthreads,
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(__half2float(label[n * spatial_dim + s]));
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    const int idx = n * dim + label_value * spatial_dim + s;
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       loss[index].setx(0U);
       counts[index].setx(0U);
     } else {
-      loss[index] = float2half_clip(- log(max(__half2float(
-          prob_data[n * dim + label_value * spatial_dim + s]), minh)));
+      loss[index] = float2half_clip(- log(max(__half2float(prob_data[idx]), minh)));
       counts[index].setx(0x3c00U);  // set to 1
     }
   }
@@ -58,10 +58,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_gpu(
   const Ftype* label = bottom[1]->gpu_data<Ftype>();
   const int dim = prob_->count() / outer_num_;
   const int nthreads = outer_num_ * inner_num_;
-  // Since this memory is not used for anything until it is overwritten
-  // on the backward pass, we use it here to avoid having to allocate new GPU
-  // memory to accumulate intermediate results in the kernel.
-  Ftype* loss_data = bottom[0]->mutable_gpu_diff<Ftype>();
+  Ftype* loss_data = loss_data_.mutable_gpu_diff();
   // Similarly, this memory is never used elsewhere, and thus we can use it
   // to avoid having to allocate additional GPU memory.
   Ftype* counts = prob_->template mutable_gpu_diff<Ftype>();
@@ -71,13 +68,13 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_gpu(
     SoftmaxLossForwardGPU<half><<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>>(nthreads, reinterpret_cast<const half*>(prob_data),
         reinterpret_cast<const half*>(label), reinterpret_cast<half*>(loss_data),
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_,
+        prob_->count(), dim, inner_num_, has_ignore_label_, ignore_label_,
         reinterpret_cast<half*>(counts));
   } else {
     // NOLINT_NEXT_LINE(whitespace/operators)
     SoftmaxLossForwardGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, stream>>> (nthreads, prob_data, label, loss_data,
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_, counts);
+        prob_->count(), dim, inner_num_, has_ignore_label_, ignore_label_, counts);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   float loss;
@@ -97,21 +94,24 @@ template <typename Dtype>
 __global__ void SoftmaxLossBackwardGPU(const int nthreads, const Dtype* top,
           const Dtype* label, Dtype* bottom_diff, const int num, const int dim,
           const int spatial_dim, const bool has_ignore_label_,
-          const int ignore_label_, Dtype* counts) {
+          const int ignore_label_, Dtype* counts,
+          Dtype label_smoothing) {
   const int channels = dim / spatial_dim;
+  const float p1 = 1.F - float(label_smoothing);
 
   CUDA_KERNEL_LOOP(index, nthreads) {
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(label[n * spatial_dim + s]);
+    const int idx = n * dim + label_value * spatial_dim + s;
 
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       for (int c = 0; c < channels; ++c) {
         bottom_diff[n * dim + c * spatial_dim + s] = 0;
       }
       counts[index] = 0;
     } else {
-      bottom_diff[n * dim + label_value * spatial_dim + s] -= 1;
+      bottom_diff[idx] -= p1;
       counts[index] = 1;
     }
   }
@@ -121,22 +121,22 @@ template <>
 __global__ void SoftmaxLossBackwardGPU<half>(const int nthreads, const half* top,
     const half* label, half* bottom_diff, const int num, const int dim,
     const int spatial_dim, const bool has_ignore_label_,
-    const int ignore_label_, half* counts) {
+    const int ignore_label_, half* counts, half label_smoothing) {
   const int channels = dim / spatial_dim;
-
+  const float p1 = 1.F - __half2float(label_smoothing);
   CUDA_KERNEL_LOOP(index, nthreads) {
     const int n = index / spatial_dim;
     const int s = index % spatial_dim;
     const int label_value = static_cast<int>(__half2float(label[n * spatial_dim + s]));
+    const int idx = n * dim + label_value * spatial_dim + s;
 
-    if (has_ignore_label_ && label_value == ignore_label_) {
+    if ((has_ignore_label_ && label_value == ignore_label_) || idx >= num) {
       for (int c = 0; c < channels; ++c) {
         bottom_diff[n * dim + c * spatial_dim + s].setx(0U);
       }
       counts[index].setx(0U);
     } else {
-      const int idx = n * dim + label_value * spatial_dim + s;
-      bottom_diff[idx] = float2half_clip(__half2float(bottom_diff[idx]) - 1.F);
+      bottom_diff[idx] = float2half_clip(__half2float(bottom_diff[idx]) - p1);
       counts[index].setx(0x3c00U);  // 1.
     }
   }
@@ -152,20 +152,24 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
   }
   if (propagate_down[0]) {
     Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
-    const Btype* prob_data = prob_->template gpu_data<Btype>();
+    Btype* prob_data = prob_->template mutable_gpu_data<Btype>();
     const Btype* top_data = top[0]->gpu_data<Btype>();
     caffe_gpu_memcpy(prob_->count() * sizeof(Btype), prob_data, bottom_diff);
     const Btype* label = bottom[1]->gpu_data<Btype>();
     const int dim = prob_->count() / outer_num_;
     const int nthreads = outer_num_ * inner_num_;
-    // Since this memory is never used for anything else,
-    // we use to to avoid allocating new GPU memory.
     Btype* counts = prob_->template mutable_gpu_diff<Btype>();
+    if (label_smoothing_ > 0) {
+      caffe_gpu_add_scalar(bottom[0]->count(),
+                           (Btype)( - label_smoothing_ / (dim - 1)), bottom_diff);
+    }
     // NOLINT_NEXT_LINE(whitespace/operators)
     SoftmaxLossBackwardGPU<<<CAFFE_GET_BLOCKS(nthreads),
         CAFFE_CUDA_NUM_THREADS, 0, Caffe::thread_stream()>>>(nthreads, top_data, label, bottom_diff,
-        outer_num_, dim, inner_num_, has_ignore_label_, ignore_label_, counts);
+        bottom[0]->count(), dim, inner_num_, has_ignore_label_, ignore_label_, counts,
+        (Btype)label_smoothing_);
     CUDA_CHECK(cudaStreamSynchronize(Caffe::thread_stream()));
+
     int valid_count = -1;
     // Only launch another CUDA kernel if we actually need the count of valid
     // outputs.

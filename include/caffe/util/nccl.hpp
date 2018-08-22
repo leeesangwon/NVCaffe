@@ -8,14 +8,20 @@
 #define NCCL_CHECK(condition) \
 { \
   ncclResult_t result = condition; \
-  CHECK_EQ(result, ncclSuccess) << " " \
+  CHECK_EQ(result, ncclSuccess) \
+    << " {" << P2PManager::global_rank() << "." \
+    << P2PManager::global_count() << "} " \
+    << " {" << P2PManager::host_name() << "} " \
     << ncclGetErrorString(result); \
 }
 
 #define NCCL_CHECK_ARG2(condition, arg1, arg2) \
 { \
   ncclResult_t result = condition; \
-  CHECK_EQ(result, ncclSuccess) << " " \
+  CHECK_EQ(result, ncclSuccess) \
+    << " {" << P2PManager::global_rank() << "." \
+    << P2PManager::global_count() << "} " \
+    << " {" << P2PManager::host_name() << "} " \
     << ncclGetErrorString(result) << \
     " (" << arg1 << ") (" << arg2 << ")"; \
 }

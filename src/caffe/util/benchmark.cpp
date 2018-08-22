@@ -5,18 +5,19 @@
 
 namespace caffe {
 
-Timer::Timer()
+Timer::Timer(bool enforce_cpu)
     : initted_(false),
       running_(false),
       has_run_at_least_once_(false),
       start_gpu_(nullptr),
       stop_gpu_(nullptr),
-      device_(-1) {
+      device_(-1),
+      use_gpu_(!enforce_cpu && Caffe::mode() == Caffe::GPU) {
   Init();
 }
 
 Timer::~Timer() {
-  if (Caffe::mode() == Caffe::GPU) {
+  if (use_gpu_) {
     int current_device;  // Just to check CUDA status:
     cudaError_t status = cudaGetDevice(&current_device);
     // Preventing crash while Caffe shutting down.
@@ -33,7 +34,7 @@ Timer::~Timer() {
 
 void Timer::Start() {
   if (!running()) {
-    if (Caffe::mode() == Caffe::GPU) {
+    if (use_gpu_) {
       CHECK_EQ(device_, Caffe::current_device());
       CUDA_CHECK(cudaEventRecord(start_gpu_, 0));
     } else {
@@ -46,7 +47,7 @@ void Timer::Start() {
 
 void Timer::Stop() {
   if (running()) {
-    if (Caffe::mode() == Caffe::GPU) {
+    if (use_gpu_) {
       CHECK_EQ(device_, Caffe::current_device());
       CUDA_CHECK(cudaEventRecord(stop_gpu_, 0));
       CUDA_CHECK(cudaEventSynchronize(stop_gpu_));
@@ -65,7 +66,7 @@ float Timer::MicroSeconds() {
   if (running()) {
     Stop();
   }
-  if (Caffe::mode() == Caffe::GPU) {
+  if (use_gpu_) {
     CHECK_EQ(device_, Caffe::current_device());
     CUDA_CHECK(cudaEventElapsedTime(&elapsed_milliseconds_, start_gpu_, stop_gpu_));
     // Cuda only measure milliseconds
@@ -84,7 +85,7 @@ float Timer::MilliSeconds() {
   if (running()) {
     Stop();
   }
-  if (Caffe::mode() == Caffe::GPU) {
+  if (use_gpu_) {
     CHECK_EQ(device_, Caffe::current_device());
     CUDA_CHECK(cudaEventElapsedTime(&elapsed_milliseconds_, start_gpu_, stop_gpu_));
   } else {
@@ -99,7 +100,7 @@ float Timer::Seconds() {
 
 void Timer::Init() {
   if (!initted()) {
-    if (Caffe::mode() == Caffe::GPU) {
+    if (use_gpu_) {
       int current_device = Caffe::current_device();
       if (device_ < 0) {
         device_ = current_device;

@@ -11,12 +11,9 @@ void nesterov_reg_update_and_clear_gpu(int N,
     void *handle, bool clear_grads);
 
 template<typename Dtype>
-float NesterovSolver<Dtype>::ComputeUpdateValue(int param_id, void *handle, float rate,
+void NesterovSolver<Dtype>::ComputeUpdateValue(int param_id, void *handle, float rate,
     bool clear_grads) {
   shared_ptr<Blob> param = this->net_->learnable_params()[param_id];
-
-  float wgrad_sq = 1.F;  // stub
-
   shared_ptr<TBlob<Dtype>> history = this->history_[param_id];
   shared_ptr<TBlob<Dtype>> update = this->update_[param_id];
   const vector<float>& net_params_lr = this->net_->params_lr();
@@ -69,7 +66,6 @@ float NesterovSolver<Dtype>::ComputeUpdateValue(int param_id, void *handle, floa
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_sq;
 }
 
 INSTANTIATE_CLASS(NesterovSolver);

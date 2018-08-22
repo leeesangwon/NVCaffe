@@ -218,7 +218,7 @@ ifeq ($(USE_OPENCV), 1)
 	ifeq ($(OPENCV_VERSION), 3)
 		LIBRARIES += opencv_imgcodecs opencv_videoio
 	endif
-		
+
 endif
 
 python_version_full := $(wordlist 2,4,$(subst ., ,$(shell python --version 2>&1)))

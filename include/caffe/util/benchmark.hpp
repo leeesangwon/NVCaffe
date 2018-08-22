@@ -9,7 +9,7 @@ namespace caffe {
 
 class Timer {
  public:
-  Timer();
+  explicit Timer(bool enforce_cpu = false);
   virtual ~Timer();
   virtual void Start();
   virtual void Stop();
@@ -34,6 +34,7 @@ class Timer {
   float elapsed_milliseconds_;
   float elapsed_microseconds_;
   int device_;
+  const bool use_gpu_;
 };
 
 class CPUTimer : public Timer {

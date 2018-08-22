@@ -22,13 +22,10 @@ void adam_reg_update_and_clear_gpu(int N,
     const std::string& regularization_type, float local_decay,  void* handle, bool clear_grads);
 
 template <typename Dtype>
-float AdamSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
+void AdamSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
     bool clear_grads) {
   const vector<shared_ptr<Blob>>& net_params = this->net_->learnable_params();
   shared_ptr<Blob> param = net_params[param_id];
-
-  float wgrad_sq = 1.F;  // stub
-
   const vector<float>& net_params_lr = this->net_->params_lr();
   float local_rate = rate * net_params_lr[param_id];
 
@@ -103,7 +100,6 @@ float AdamSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float ra
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_sq;
 }
 
 INSTANTIATE_CLASS(AdamSolver);

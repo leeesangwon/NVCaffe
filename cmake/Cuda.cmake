@@ -1,6 +1,6 @@
 # Known NVIDIA GPU achitectures Caffe can be compiled for.
 # This list will be used for CUDA_ARCH_NAME = All option
-set(Caffe_known_gpu_archs "30 35 50 52 60 61 70")
+set(Caffe_known_gpu_archs "30 35 50 52 60 61 70 75")
 
 ################################################################################################
 # A function for automatic detection of GPUs installed  (if autodetection is enabled)
@@ -51,7 +51,7 @@ endfunction()
 #   caffe_select_nvcc_arch_flags(out_variable)
 function(caffe_select_nvcc_arch_flags out_variable)
   # List of arch names
-  set(__archs_names "Kepler" "Maxwell" "Pascal" "Volta" "All" "Manual")
+  set(__archs_names "Kepler" "Maxwell" "Pascal" "Volta" "Turing" "All" "Manual")
   set(__archs_name_default "All")
   if(NOT CMAKE_CROSSCOMPILING)
     list(APPEND __archs_names "Auto")
@@ -86,6 +86,8 @@ function(caffe_select_nvcc_arch_flags out_variable)
     set(__cuda_arch_bin "60 61")
   elseif(${CUDA_ARCH_NAME} STREQUAL "Volta")
     set(__cuda_arch_bin "70")
+  elseif(${CUDA_ARCH_NAME} STREQUAL "Turing")
+    set(__cuda_arch_bin "75")
   elseif(${CUDA_ARCH_NAME} STREQUAL "All")
     set(__cuda_arch_bin ${Caffe_known_gpu_archs})
   elseif(${CUDA_ARCH_NAME} STREQUAL "Auto")
@@ -211,7 +213,7 @@ endfunction()
 ###  Non macro section
 ################################################################################################
 
-find_package(CUDA 5.5 QUIET)
+find_package(CUDA 8.0 QUIET)
 find_cuda_helper_libs(curand)  # cmake 2.8.7 compartibility which doesn't search for curand
 
 if(NOT CUDA_FOUND)
@@ -220,6 +222,11 @@ endif()
 
 set(HAVE_CUDA TRUE)
 message(STATUS "CUDA detected: " ${CUDA_VERSION})
+
+if(NOT CUDA_VERSION VERSION_LESS "10.0")
+  STRING(REGEX REPLACE "CUDA_cublas_device_LIBRARY-NOTFOUND" "" CUDA_CUBLAS_LIBRARIES ${CUDA_CUBLAS_LIBRARIES})
+endif()
+
 include_directories(SYSTEM ${CUDA_INCLUDE_DIRS})
 list(APPEND Caffe_LINKER_LIBS ${CUDA_CUDART_LIBRARY}
                               ${CUDA_curand_LIBRARY} ${CUDA_CUBLAS_LIBRARIES})

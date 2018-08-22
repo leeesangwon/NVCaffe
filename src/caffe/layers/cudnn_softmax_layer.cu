@@ -25,7 +25,6 @@ void CuDNNSoftmaxLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
   if (propagate_down[0]) {
     const Btype* top_data = top[0]->gpu_data<Btype>();
     const Btype* top_diff = top[0]->gpu_diff<Btype>();
-    const Btype* bottom_data = bottom[0]->gpu_data<Btype>();
     Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
 
     CUDNN_CHECK(cudnnSoftmaxBackward(

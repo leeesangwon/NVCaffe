@@ -19,14 +19,21 @@ void SplitLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom, const vector
     if (top[i]->count() != bottom[0]->count()) {
       top[i]->ReshapeLike(*bottom[0]);
     }
+    CHECK(!Blob::IsSharedDataCycled(bottom));
     top[i]->ShareData(*bottom[0]);
     CHECK_EQ(count_, top[i]->count());
   }
+  CHECK(!Blob::IsSharedDiffCycled(top));
   bottom[0]->ShareDiff(*top[0]);
 }
 
 template <typename Ftype, typename Btype>
 void SplitLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom, const vector<Blob*>& top) {
+  CHECK(!Blob::IsSharedDataCycled(bottom));
+  for (int i = 0; i < top.size(); ++i) {
+    top[i]->ReshapeLike(*bottom[0]);
+    top[i]->ShareData(*bottom[0]);
+  }
 }
 
 template <typename Ftype, typename Btype>

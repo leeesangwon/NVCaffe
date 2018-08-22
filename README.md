@@ -17,7 +17,7 @@ backward passes might be different too), or it can be set for the whole Net.
  accuracy, especially in 16-bit training.
 * **Integration with  [cuDNN](https://developer.nvidia.com/cudnn) v7**.
 * **Automatic selection of the best cuDNN convolution algorithm**.
-* **Integration with v2.2 of [NCCL library](https://github.com/NVIDIA/nccl)**
+* **Integration with v2.2 (or higher) of [NCCL library](https://github.com/NVIDIA/nccl)**
  for improved multi-GPU scaling.
 * **Optimized GPU memory management** for data and parameters storage, I/O buffers 
 and workspace for convolutional layers.
@@ -27,7 +27,8 @@ and workspace for convolutional layers.
 * **Multi-GPU test phase** for even memory load across multiple GPUs.
 * **Backward compatibility with BVLC Caffe and NVCaffe 0.15 and higher**.
 * **Extended set of optimized models** (including 16 bit floating point examples).
-
+* _Experimental feature (no official support)_ **Multi-node training** (since v0.17.1, NCCL 2.2 and OpenMPI 2 required).
+* _Experimental feature (no official support)_ **TRTLayer** (since v0.17.1, can be used as inference plugin).
 
 ## License and Citation
 
@@ -42,6 +43,11 @@ Please cite Caffe in your publications if it helps your research:
       Title = {Caffe: Convolutional Architecture for Fast Feature Embedding},
       Year = {2014}
     }
+   
+## Contributions
+
+Please read, sign and attach enclosed agreement **NVIDIA_CLA_v1.0.1.docx**
+to your PR.
 
 ## Useful notes
 

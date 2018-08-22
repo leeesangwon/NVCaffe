@@ -34,7 +34,7 @@ class AnnotatedDataLayer : public DataLayer<Ftype, Btype> {
   }
 
  protected:
-  void load_batch(Batch* batch, int thread_id, size_t queue_id) override;
+  bool load_batch(Batch* batch, int thread_id, size_t queue_id) override;
   void start_reading() override {
     areader_->start_reading();
   }

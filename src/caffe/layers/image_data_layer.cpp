@@ -6,6 +6,7 @@
 #include "caffe/solver.hpp"
 #include "caffe/layers/image_data_layer.hpp"
 #include "caffe/util/rng.hpp"
+#include "caffe/parallel.hpp"
 
 #define IDL_CACHE_PROGRESS 0.05F
 
@@ -13,8 +14,7 @@ namespace caffe {
 
 static std::mutex idl_mutex_;
 
-template <typename Ftype, typename Btype>
-size_t ImageDataLayer<Ftype, Btype>::id(const string& ph, const string& name) {
+static size_t idl_id(const string& ph, const string& name) {
   std::lock_guard<std::mutex> lock(idl_mutex_);
   static size_t id = 0UL;
   static map<string, size_t> ph_names;
@@ -31,9 +31,10 @@ size_t ImageDataLayer<Ftype, Btype>::id(const string& ph, const string& name) {
 template <typename Ftype, typename Btype>
 ImageDataLayer<Ftype, Btype>::ImageDataLayer(const LayerParameter& param, size_t solver_rank)
     : BasePrefetchingDataLayer<Ftype, Btype>(param, solver_rank),
-      id_(id(Phase_Name(this->phase_), this->name())),
+      id_(idl_id(Phase_Name(this->phase_), this->name())),
       epoch_count_(0UL) {
-  DLOG(INFO) << this->print_current_device() << " ImageDataLayer: " << this
+  LOG_IF(INFO, P2PManager::global_rank() == 0)
+             << this->print_current_device() << " ImageDataLayer: " << this
              << " name: " << this->name()
              << " id: " << id_
              << " threads: " << this->threads_num();
@@ -56,15 +57,14 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
   const int crop = this->layer_param_.transform_param().crop_size();
   const bool is_color  = image_data_param.is_color();
   const string& root_folder = image_data_param.root_folder();
-  vector<std::pair<std::string, int>>& lines = lines_[id_];
 
   CHECK((new_height == 0 && new_width == 0) ||
       (new_height > 0 && new_width > 0)) << "Current implementation requires "
       "new_height and new_width to be set at the same time.";
 
-  if (this->rank_ == 0) {
+  if (this->rank_ % Caffe::device_in_use_per_host_count() == 0) {
     // Read the file with filenames and labels
-    lines.clear();
+    lines_[id_].clear();
     const string &source = image_data_param.source();
     LOG(INFO) << "Opening file " << source;
     std::ifstream infile(source.c_str());
@@ -72,7 +72,7 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
     string filename;
     int label;
     while (infile >> filename >> label) {
-      lines.emplace_back(std::make_pair(filename, label));
+      lines_[id_].emplace_back(std::make_pair(filename, label));
     }
     if (image_data_param.shuffle()) {
       // randomly shuffle data
@@ -80,8 +80,14 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
       prefetch_rng_.reset(new Caffe::RNG(caffe_rng_rand()));
       ShuffleImages();
     }
+    if (image_data_param.dataset_share_per_node() > 1.F
+        && this->phase_ == TRAIN) {
+      lines_[id_].resize(std::lround(lines_[id_].size()
+          / image_data_param.dataset_share_per_node()));
+    }
   }
-  LOG(INFO) << this->print_current_device() << " A total of " << lines.size() << " images.";
+  LOG_IF(INFO, P2PManager::global_rank() == 0)
+  << this->print_current_device() << " A total of " << lines_[id_].size() << " images.";
 
   size_t skip = 0UL;
   // Check if we would need to randomly skip a few data points
@@ -91,17 +97,20 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
     } else {
       skip = caffe_rng_rand() % image_data_param.rand_skip();
       LOG(INFO) << "Skipping first " << skip << " data points";
-      CHECK_GT(lines.size(), skip) << "Not enough points to skip";
+      CHECK_GT(lines_[id_].size(), skip) << "Not enough points to skip";
     }
   }
   line_ids_.resize(this->threads_num());
   for (size_t i = 0; i < this->threads_num(); ++i) {
-    line_ids_[i] = this->rank_ * this->threads_num() + i + skip;
+    line_ids_[i] = (this->rank_ % Caffe::device_in_use_per_host_count()) *
+        this->threads_num() + i + skip;
   }
 
   // Read an image, and use it to initialize the top blob.
-  string file_name = lines[line_ids_[0]].first;
-  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side);
+  const string& file_name = lines_[id_][line_ids_[0]].first;
+  bool from_cache = false;
+  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side,
+      from_cache);
   CHECK(cv_img.data) << "Could not load " << root_folder + file_name;
   // Reshape prefetch_data and top[0] according to the batch_size.
   const int batch_size = image_data_param.batch_size();
@@ -116,7 +125,7 @@ void ImageDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
   }
   vector<int> top_shape { batch_size, cv_img.channels(), crop_height, crop_width };
   top[0]->Reshape(top_shape);
-  LOG(INFO) << "output data size: " << top[0]->num() << ", "
+  LOG_IF(INFO, P2PManager::global_rank() == 0) << "output data size: " << top[0]->num() << ", "
       << top[0]->channels() << ", " << top[0]->height() << ", "
       << top[0]->width();
   // label
@@ -139,12 +148,14 @@ void ImageDataLayer<Ftype, Btype>::InitializePrefetch() {}
 template<typename Ftype, typename Btype>
 cv::Mat ImageDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const string& file_name,
                                                int height, int width,
-                                               bool is_color, int short_side) {
+                                               bool is_color, int short_side, bool& from_cache) {
+  from_cache = false;
   if (this->layer_param_.image_data_param().cache()) {
     std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
     if (cache_[id_].size() > 0) {
       auto it = cache_[id_].find(file_name);
       if (it != cache_[id_].end()) {
+        from_cache = true;
         return it->second;
       }
     }
@@ -153,7 +164,7 @@ cv::Mat ImageDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const 
 }
 
 template <typename Ftype, typename Btype>
-void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t) {
+bool ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t) {
   CHECK(batch->data_->count());
   const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
   const int batch_size = image_data_param.batch_size();
@@ -166,15 +177,16 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   const bool shuffle = image_data_param.shuffle();
   const string& root_folder = image_data_param.root_folder();
   unordered_map<std::string, cv::Mat>& cache = cache_[id_];
-  vector<std::pair<std::string, int>>& lines = lines_[id_];
 
   size_t line_id = line_ids_[thread_id];
-  const size_t line_bucket = Caffe::gpus().size() * this->threads_num();
-  const size_t lines_size = lines.size();
+  const size_t line_bucket = Caffe::device_in_use_per_host_count() * this->threads_num();
+  const size_t lines_size = lines_[id_].size();
   // Reshape according to the first image of each batch
   // on single input batches allows for inputs of varying dimension.
-  string file_name = lines[line_id].first;
-  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side);
+  const string& file_name = lines_[id_][line_id].first;
+  bool from_cache = false;
+  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side,
+      from_cache);
 
   CHECK(cv_img.data) << "Could not load " << (root_folder + file_name);
   int crop_height = crop;
@@ -201,8 +213,10 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   const size_t buf_len = batch->data_->offset(1);
   for (int item_id = 0; item_id < batch_size; ++item_id) {
     CHECK_GT(lines_size, line_id);
-    file_name = lines[line_id].first;
-    cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side);
+    const string& file_name = lines_[id_][line_id].first;
+    from_cache = false;
+    cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side,
+        from_cache);
 
     if (cv_img.data) {
       int offset = batch->data_->offset(item_id);
@@ -214,26 +228,31 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
       hwc2chw(top_shape[1], top_shape[3], top_shape[2], tmp.data(), prefetch_data + offset);
       packing = NCHW;
 #endif
-      prefetch_label[item_id] = lines[line_id].second;
+      prefetch_label[item_id] = lines_[id_][line_id].second;
     }
-    if (cache_on && !cached_[id_]) {
+    if (cache_on && !cached_[id_] && !from_cache) {
       std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
       if (cv_img.data != nullptr) {
         auto em = cache.emplace(file_name, cv_img);
         if (em.second) {
           ++cached_num_[id_];
+        } else {
+          DLOG(WARNING) << this->print_current_device()
+                        << " Duplicate @ " << line_id << " " << file_name;
         }
       } else {
         ++failed_num_[id_];
       }
       if (cached_num_[id_] + failed_num_[id_] >= lines_size) {
         cached_[id_] = true;
-        LOG(INFO) << cache.size() << " objects cached for " << Phase_Name(this->phase_)
+        LOG_IF(INFO, P2PManager::global_rank() == 0) << cache.size()
+                  << " objects cached for " << Phase_Name(this->phase_)
                   << " by layer " << this->name();
       } else if ((float) cached_num_[id_] / lines_size >=
           cache_progress_[id_] + IDL_CACHE_PROGRESS) {
         cache_progress_[id_] = (float) cached_num_[id_] / lines_size;
-        LOG(INFO) << std::setw(2) << std::setfill(' ') << f_round1(cache_progress_[id_] * 100.F)
+        LOG_IF(INFO, P2PManager::global_rank() == 0)     << this->print_current_device() << " "
+                  << std::setw(2) << std::setfill(' ') << f_round1(cache_progress_[id_] * 100.F)
                   << "% of objects cached for "
                   << Phase_Name(this->phase_) << " by layer '" << this->name() << "' ("
                   << cached_num_[id_] << "/" << lines_size << ")";
@@ -246,18 +265,20 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
       while (line_ids_[thread_id] >= lines_size) {
         line_ids_[thread_id] -= lines_size;
       }
-      if (thread_id == 0 && this->rank_ == 0) {
+      if (thread_id == 0 &&
+          this->rank_ % Caffe::device_in_use_per_host_count() == 0) {
         if (this->phase_ == TRAIN) {
           // We have reached the end. Restart from the first.
-          LOG(INFO) << this->print_current_device() << " Restarting data prefetching ("
-                    << lines_size << ")";
+          LOG_IF(INFO, P2PManager::global_rank() == 0)
+          << this->print_current_device() << " Restarting data prefetching (" << lines_size << ")";
           if (epoch_count_ == 0UL) {
-            epoch_count_ += lines_size;
+            epoch_count_ += std::lround(lines_[id_].size()
+                * image_data_param.dataset_share_per_node());
             Caffe::report_epoch_count(epoch_count_);
           }
         }
         if (shuffle) {
-          LOG(INFO) << "Shuffling data";
+          LOG_IF(INFO, P2PManager::global_rank() == 0) << "Shuffling data";
           ShuffleImages();
         }
       }
@@ -266,6 +287,7 @@ void ImageDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_
   }
   batch->set_data_packing(packing);
   batch->set_id(this->batch_id(thread_id));
+  return cached_[id_];
 }
 
 INSTANTIATE_CLASS_CPU_FB(ImageDataLayer);

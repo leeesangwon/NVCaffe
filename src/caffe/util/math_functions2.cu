@@ -505,4 +505,64 @@ void caffe_gpu_eltwise_min<float16>(const int N,
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
+#if false
+template<typename Dtype>
+__global__ void histogram_kernel(unsigned int N, const Dtype* x, unsigned int *h) {
+  __shared__ unsigned int shmem[CAFFE_CUDA_NUM_THREADS];
+  shmem[threadIdx.x] = 0;
+  __syncthreads();
+  int i = threadIdx.x + blockIdx.x * blockDim.x;
+  int offset = blockDim.x * gridDim.x;
+  while (i < N) {
+    float f = (float)x[i];
+    if (f > 0.F) {
+      atomicAdd(shmem + (lround(log2(f)) + CAFFE_CUDA_NUM_THREADS / 2), 1);
+    }
+    i += offset;
+  }
+  __syncthreads();
+  atomicAdd(h + threadIdx.x, shmem[threadIdx.x]);
+}
+
+template<>
+__global__ void histogram_kernel<__half>(unsigned int N, const __half* x, unsigned int *h) {
+  __shared__ unsigned int shmem[CAFFE_CUDA_NUM_THREADS];
+  shmem[threadIdx.x] = 0;
+  __syncthreads();
+  int i = threadIdx.x + blockIdx.x * blockDim.x;
+  int offset = blockDim.x * gridDim.x;
+  while (i < N) {
+    if (__hgt(x[i], 0)) {
+      atomicAdd(shmem + (__half2int_rn(hlog2(x[i])) + CAFFE_CUDA_NUM_THREADS / 2), 1);
+    }
+    i += offset;
+  }
+  __syncthreads();
+  atomicAdd(h + threadIdx.x, shmem[threadIdx.x]);
+}
+
+template<typename T>
+void caffe_gpu_histogram(unsigned int N, const T* x, unsigned int* h) {
+  cudaStream_t stream = Caffe::thread_stream();
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  histogram_kernel<T><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, stream>>>
+      (N, x, h);
+  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+template<>
+void caffe_gpu_histogram<float16>(unsigned int N, const float16* x, unsigned int* h) {
+  cudaStream_t stream = Caffe::thread_stream();
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  histogram_kernel<__half><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, stream>>>
+      (N, reinterpret_cast<const __half*>(x), h);
+  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+template void caffe_gpu_histogram<float>(unsigned int N, const float* x, unsigned int* h);
+template void caffe_gpu_histogram<double>(unsigned int N, const double* x, unsigned int* h);
+#endif
+
 }  // namespace caffe

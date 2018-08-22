@@ -21,6 +21,7 @@ void SoftmaxLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
   vector<int> scale_dims = bottom[0]->shape();
   scale_dims[softmax_axis_] = 1;
   scale_.Reshape(scale_dims);
+  scale_.set_data(0.F);
 }
 
 template <typename Ftype, typename Btype>
@@ -28,7 +29,7 @@ void SoftmaxLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
     const vector<Blob*>& top) {
   const Ftype* bottom_data = bottom[0]->cpu_data<Ftype>();
   Ftype* top_data = top[0]->mutable_cpu_data<Ftype>();
-  Ftype* scale_data = scale_.template mutable_cpu_data<Ftype>();
+  Ftype* scale_data = scale_.mutable_cpu_data();
   int channels = bottom[0]->shape(softmax_axis_);
   int dim = bottom[0]->count() / outer_num_;
   caffe_copy(bottom[0]->count(), bottom_data, top_data);

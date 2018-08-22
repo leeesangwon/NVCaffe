@@ -148,6 +148,9 @@ void MultiBoxLossLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
       << "Number of priors must match number of location predictions.";
   CHECK_EQ(num_priors_ * num_classes_, bottom[1]->channels())
       << "Number of priors must match number of confidence predictions.";
+  // In case of retry to Forward
+  all_match_indices_.clear();
+  all_neg_indices_.clear();
 }
 
 template <typename Ftype, typename Btype>
@@ -232,6 +235,7 @@ void MultiBoxLossLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
       // Consider all scores.
       // Share data and diff with bottom[1].
       CHECK_EQ(conf_pred_->count(), bottom[1]->count());
+      CHECK(!Blob::IsSharedDataCycled(bottom));
       conf_pred_->ShareData(*(bottom[1]));
     }
     Dtype* conf_pred_data = conf_pred_->mutable_cpu_data<Dtype>();
@@ -289,6 +293,9 @@ void MultiBoxLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       Dtype normalizer = LossLayer<Ftype, Btype>::GetNormalizer(
           normalization_, num_, num_priors_, num_matches_);
       Dtype loss_weight = top[0]->cpu_diff<Dtype>()[0] / normalizer;
+      if (this->parent_net() != NULL) {
+        loss_weight *= this->parent_net()->global_grad_scale();
+      }
       caffe_scal(loc_pred_->count(), loss_weight, loc_pred_->mutable_cpu_diff<Dtype>());
       // Copy gradient back to bottom[0].
       const Dtype* loc_pred_diff = loc_pred_->cpu_diff<Dtype>();
@@ -330,6 +337,9 @@ void MultiBoxLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       Dtype normalizer = LossLayer<Ftype, Btype>::GetNormalizer(
           normalization_, num_, num_priors_, num_matches_);
       Dtype loss_weight = top[0]->cpu_diff<Dtype>()[0] / normalizer;
+      if (this->parent_net() != NULL) {
+        loss_weight *= this->parent_net()->global_grad_scale();
+      }
       caffe_scal(conf_pred_->count(), loss_weight,
                  conf_pred_->mutable_cpu_diff<Dtype>());
       // Copy gradient back to bottom[1].

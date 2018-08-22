@@ -315,7 +315,7 @@ message NetParameter {
   // For better performance we unify multiple layers in buckets.
   // This parameter sets approximate number of buckets to combine layers to.
   // Default value is good for majority of nets.
-  optional int32 reduce_buckets = 18 [default = 3];
+  optional int32 reduce_buckets = 18 [default = 6];
 
   // Sets the default "cudnn_math_override" value for every layer
   optional int32 default_cudnn_math_override = 19 [default = -1];
@@ -427,11 +427,13 @@ message SolverParameter {
   optional bool larc = 49 [default = false]; 
   optional string larc_policy = 50 [default = "scale"];
   optional float  larc_eta = 51    [default = 0.001];
-  
+  optional bool larc_turbo = 55    [default = false];
+
   optional float  weight_decay = 12; // The weight decay.  
   optional string weight_decay_policy = 52 [default = "fixed"]; 
-  optional float  weight_decay_power  = 53 [default = 0.5];
-  
+  optional float  weight_decay_power  = 53 [default = 1.0];
+  optional float  max_weight_decay  = 56 [default = 0.0];
+
   // regularization types supported: L1 and L2
   // controlled by weight_decay
   optional string regularization_type = 29 [default = "L2"];
@@ -496,6 +498,7 @@ message SolverParameter {
     RMSPROP = 3;
     ADADELTA = 4;
     ADAM = 5;
+    SAG = 6;
   }
   // DEPRECATED: use type instead of solver_type
   optional SolverType solver_type = 30 [default = SGD];
@@ -578,7 +581,7 @@ message ParamSpec {
 // NOTE
 // Update the next available ID when you add a new LayerParameter field.
 //
-// LayerParameter next available layer-specific ID: 152 (last added: recurrent_param)
+// LayerParameter next available layer-specific ID: 153 (last added: trt_param)
 message LayerParameter {
   optional string name = 1; // the layer name
   optional string type = 2; // the layer type
@@ -702,6 +705,7 @@ message LayerParameter {
   optional VideoDataParameter video_data_param = 207;
   optional WindowDataParameter window_data_param = 129;
   optional RecurrentParameter recurrent_param = 151;
+  optional TRTParameter trt_param = 152;
 
   // NVIDIA PARAMETERS (Start with 68 because NV is 68 on an old-style phone)
   optional DetectNetGroundTruthParameter detectnet_groundtruth_param = 6801;
@@ -1057,6 +1061,9 @@ message LossParameter {
   // is not specified, then setting this to false will be equivalent to
   // normalization = BATCH_SIZE to be consistent with previous behavior.
   optional bool normalize = 2;
+  // https://arxiv.org/abs/1512.00567
+  // Usually between 0...0.2
+  optional float label_smoothing = 4 [default = 0.0];
 }
 
 // Messages that store parameters used by individual layer types follow, in
@@ -1305,6 +1312,9 @@ message DataParameter {
   optional bool cache = 13 [default = false];
   // Shuffle observations while reading for better accuracy. Ignored if 'cache' is false.
   optional bool shuffle = 14 [default = false];
+  // Cache all observations in RAM before doing anything else.
+  // Cache might fail if it doesn't fit.
+  optional bool precache = 16 [default = false];
 }
 
 // Message that store parameters used by DetectionEvaluateLayer
@@ -1549,6 +1559,12 @@ message ImageDataParameter {
   optional uint32 threads  = 14 [default = 4];
   // Whether or not ImageLayer should cache all files in RAM. Cache might fail if it doesn't fit.
   optional bool cache = 15 [default = false];
+  // Whether or not ImageLayer should cache all files in RAM before doing anything else.
+  // Cache might fail if it doesn't fit.
+  optional bool precache = 16 [default = false];
+  // In multi-node training it's helpful sometimes to limit amount of data used by a node.
+  // Set to 2 to cut it by half after first shuffle (ignored if shuffle is off, TRAIN only).
+  optional float dataset_share_per_node = 17 [default = 1];
 }
 
 message InfogainLossParameter {
@@ -1687,6 +1703,7 @@ message MultiBoxLossParameter {
   optional NonMaximumSuppressionParameter nms_param = 21;
   optional int32 sample_size = 22 [default = 64];
   optional bool use_prior_for_nms = 23 [default = false];
+  optional bool ignore_difficult_gt = 24 [default = false];
 }
 
 message MVNParameter {
@@ -2022,6 +2039,31 @@ message TanHParameter {
     CUDNN = 2;
   }
   optional Engine engine = 1 [default = DEFAULT];
+}
+
+// TRTLayer parameters
+message TRTParameter {
+  enum TRTMode {
+    FP32 = 0;
+    FP16 = 1;
+    INT8 = 2;
+  }
+
+  optional TRTMode trt_mode = 1 [default = INT8];
+  // When computing accuracy, count as correct by comparing the true label to
+  // the top k scoring classes.  By default, only compare to the top scoring
+  // class (i.e. argmax).
+  optional uint32 top_k = 2 [default = 1];
+  // Deploy file name to run inference for.
+  required string deploy = 3;
+  // Weights (.caffemodel) file name to run inference for.
+  required string model = 4;
+  // Output blob names (like "prob")
+  repeated string deploy_outputs = 5;
+  // Int8 calibrator file
+  optional string calibrator = 6;
+  // TRT batch
+//  optional uint32 batch_size = 7 [default = 1];
 }
 
 // Message that stores parameters used by TileLayer

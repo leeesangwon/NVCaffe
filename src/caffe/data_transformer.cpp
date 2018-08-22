@@ -348,6 +348,18 @@ vector<int> DataTransformer<Dtype>::Transform(const Datum* datum, Dtype* buf, si
     Transform(img, buf, buf_len, repack);
     out_packing = NHWC;
   }
+
+//  if (!shape_only) {
+//    cv::Mat im;
+//    im.create(shape[2], shape[3], CVFC<float>(shape[1]));
+//    chw2hwc(shape[1], shape[2], shape[3], buf, im.ptr<float>(0));
+//    cv::Mat dsp;
+////  im.convertTo(dsp, CV_32F);
+//    cv::normalize(im, dsp, 0, 1, cv::NORM_MINMAX);
+//    cv::imshow("testCR", dsp);
+//    cv::waitKey(0);
+//  }
+//
   return shape;
 }
 

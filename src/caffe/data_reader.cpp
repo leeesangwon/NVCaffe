@@ -16,8 +16,8 @@ std::mutex DataReader<DatumType>::DataCache::cache_mutex_{};
 
 template<typename DatumType>
 DataReader<DatumType>::DataReader(const LayerParameter& param,
-    size_t solver_count,
-    size_t solver_rank,
+    size_t local_solver_count,
+    size_t local_solver_rank,
     size_t parser_threads_num,
     size_t transf_threads_num,
     size_t queue_depth,
@@ -27,20 +27,21 @@ DataReader<DatumType>::DataReader(const LayerParameter& param,
     bool shuffle,
     bool epoch_count_required)
     : InternalThread(Caffe::current_device(),
-          solver_rank, sample_only ? 1U : parser_threads_num, false),
+                     local_solver_rank, sample_only ? 1U : parser_threads_num, false),
       parser_threads_num_(threads_num()),
       transf_threads_num_(sample_only ? 1U : transf_threads_num),
       queues_num_(parser_threads_num_ * transf_threads_num_),
       queue_depth_(queue_depth),
-      solver_count_(solver_count),
-      solver_rank_(solver_rank),
+      local_solver_count_(local_solver_count),
+      local_solver_rank_(local_solver_rank),
       skip_one_batch_(skip_one_batch),
       current_rec_(0),
       current_queue_(0),
       sample_only_(sample_only),
       cache_(cache && !sample_only),
       shuffle_(cache_ && shuffle),
-      epoch_count_required_(epoch_count_required) {
+      epoch_count_required_(epoch_count_required),
+      cursors_cached_(0) {
   CHECK(queues_num_);
   CHECK(queue_depth_);
   batch_size_ = param.data_param().batch_size();
@@ -50,7 +51,7 @@ DataReader<DatumType>::DataReader(const LayerParameter& param,
   }
   if (cache_) {
     // This is singleton, we cache TRAIN db only
-    data_cache_ = DataCache::data_cache_inst(parser_threads_num_ * solver_count_, shuffle_);
+    data_cache_ = DataCache::data_cache_inst(parser_threads_num_ * local_solver_count_, shuffle_);
   }
 
   free_.resize(queues_num_);
@@ -95,8 +96,8 @@ void DataReader<DatumType>::InternalThreadEntryN(size_t thread_id) {
 
   CursorManager cm(db.get(),
       this,
-      solver_count_,
-      solver_rank_,
+      local_solver_count_,
+      local_solver_rank_,
       parser_threads_num_,
       thread_id,
       batch_size_,

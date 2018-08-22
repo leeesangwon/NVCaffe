@@ -175,8 +175,8 @@ TYPED_TEST(PositiveUnitballStaticFillerTest, TestFill) {
     for (int j = 0; j < dim; ++j) {
       sum += data[i * dim + j];
     }
-    EXPECT_GE(sum, tol<TypeParam>(0.999, 0.998));
-    EXPECT_LE(sum, tol<TypeParam>(1.001, 1.002));
+    EXPECT_GE(sum, tol<TypeParam>(0.999, 0.997));
+    EXPECT_LE(sum, tol<TypeParam>(1.001, 1.003));
   }
   // We want to check that repeated calls to the static filler returns the same
   // values. So we copy the first filler call to data_0 and the second one to

@@ -70,6 +70,8 @@ BasePrefetchingDataLayer<Ftype, Btype>::BasePrefetchingDataLayer(const LayerPara
       iter0_(true) {
   CHECK_EQ(transf_num_, threads_num());
   batch_size_ = param.data_param().batch_size();
+  precache_ = param.has_image_data_param() ?
+      param.image_data_param().precache() : param.data_param().precache();
   // We begin with minimum required
   ResizeQueues();
 }
@@ -107,6 +109,7 @@ void BasePrefetchingDataLayer<Ftype, Btype>::InternalThreadEntry() {
 template<typename Ftype, typename Btype>
 void BasePrefetchingDataLayer<Ftype, Btype>::InternalThreadEntryN(size_t thread_id) {
   const bool auto_mode = this->auto_mode();
+  bool precached = false;
   if (auto_mode) {
     iter0_.wait_reset();  // sample reader first
   } else if (this->phase_ == TRAIN) {
@@ -123,6 +126,10 @@ void BasePrefetchingDataLayer<Ftype, Btype>::InternalThreadEntryN(size_t thread_
       const size_t qid = this->queue_id(thread_id);
       shared_ptr<Batch> batch = batch_transformer_->prefetched_pop_free(qid);
       CHECK_EQ((size_t) -1L, batch->id());
+      if (precache_ && !precached) {
+        while (!load_batch(batch.get(), thread_id, qid)) {}
+        precached = true;
+      }
       load_batch(batch.get(), thread_id, qid);
       if (must_stop(thread_id)) {
         break;

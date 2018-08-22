@@ -105,8 +105,8 @@ class DataReader : public InternalThread {
 
  public:
   DataReader(const LayerParameter& param,
-      size_t solver_count,
-      size_t solver_rank,
+      size_t local_solver_count,
+      size_t local_solver_rank,
       size_t parser_threads_num,
       size_t transf_threads_num,
       size_t queue_depth,
@@ -160,7 +160,12 @@ class DataReader : public InternalThread {
   }
 
   void just_cached() {
+    ++cursors_cached_;
     data_cache_->just_cached();
+  }
+
+  bool cached_all() const {
+    return cursors_cached_.load() == this->threads_num();
   }
 
  protected:
@@ -170,7 +175,7 @@ class DataReader : public InternalThread {
   const size_t parser_threads_num_, transf_threads_num_;
   const size_t queues_num_, queue_depth_;
   string db_source_;
-  const size_t solver_count_, solver_rank_;
+  const size_t local_solver_count_, local_solver_rank_;
   size_t batch_size_;
   const bool skip_one_batch_;
   DataParameter_DB backend_;
@@ -186,6 +191,7 @@ class DataReader : public InternalThread {
   bool sample_only_;
   const bool cache_, shuffle_;
   const bool epoch_count_required_;
+  std::atomic_int cursors_cached_;
 
   DataCache* data_cache_;
   static std::mutex db_mutex_;

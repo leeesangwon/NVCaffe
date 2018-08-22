@@ -39,6 +39,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::LayerSetUp(
   } else {
     normalization_ = this->layer_param_.loss_param().normalization();
   }
+  label_smoothing_ = this->layer_param_.loss_param().label_smoothing();
 }
 
 template <typename Ftype, typename Btype>
@@ -59,6 +60,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Reshape(
     // softmax output
     top[1]->ReshapeLike(*bottom[0]);
   }
+  loss_data_.ReshapeLike(*bottom[0]);
 }
 
 template <typename Ftype, typename Btype>
@@ -149,7 +151,7 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
     // Scale gradient
     Btype loss_weight = top[0]->cpu_diff<Btype>()[0] / get_normalizer(normalization_, count);
     if (this->parent_net() != NULL) {
-      float fp16_global_grad_scale = this->parent_net()->global_grad_scale();
+      const float fp16_global_grad_scale = this->parent_net()->global_grad_scale();
       loss_weight *= fp16_global_grad_scale;
     }
     caffe_scal(prob_->count(), loss_weight, bottom_diff);

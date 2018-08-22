@@ -147,6 +147,10 @@ vector<int> Decode(const unsigned char* content, size_t content_size, int color_
                             TJFLAG_NOREALLOC)) {
         return vector<int>{};
       }
+      if (cv_img->channels() < 3 && color_mode > 0) {
+        cv::cvtColor(*cv_img, *cv_img, cv::COLOR_GRAY2BGR);
+        ch = 3;
+      }
     }
     tjDestroy(jpeg_decoder);
     return vector<int>{1, ch, height, width};

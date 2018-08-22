@@ -400,6 +400,11 @@ void EncodeBBox(
       encode_bbox->set_ymax(log(bbox_height / prior_height));
     } else {
       // Encode variance in bbox.
+      CHECK_EQ(prior_variance.size(), 4);
+      for (int i = 0; i < prior_variance.size(); ++i) {
+        CHECK_GT(prior_variance[i], 0);
+      }
+      // Encode variance in bbox.
       encode_bbox->set_xmin(
           (bbox_center_x - prior_center_x) / prior_width / prior_variance[0]);
       encode_bbox->set_ymin(
@@ -586,7 +591,8 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
     const vector<NormalizedBBox>& pred_bboxes, const int label,
     const MatchType match_type, const float overlap_threshold,
     const bool ignore_cross_boundary_bbox,
-    vector<int>* match_indices, vector<float>* match_overlaps) {
+    vector<int>* match_indices, vector<float>* match_overlaps,
+    bool ignore_difficult_gt) {
   int num_pred = pred_bboxes.size();
   match_indices->clear();
   match_indices->resize(num_pred, -1);
@@ -646,19 +652,18 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
         // The prediction already has matched ground truth or is ignored.
         continue;
       }
-      for (int j : gt_pool) {
-        auto joverlap = it->second.find(j);
-        if (joverlap == it->second.end()) {
-          // No overlap between the i-th prediction and j-th ground truth.
-          continue;
-        }
-        // Find the maximum overlapped pair.
-        if (joverlap->second > max_overlap) {
-          // If the prediction has not been matched to any ground truth,
-          // and the overlap is larger than maximum overlap, update.
-          max_idx = i;
-          max_gt_idx = j;
-          max_overlap = joverlap->second;
+
+      for (auto ov_map : it->second) {
+        const int j = ov_map.first;
+        if (gt_pool.count(j) > 0) {
+          // Find the maximum overlapped pair.
+          if (ov_map.second > max_overlap) {
+            // If the prediction has not been matched to any ground truth,
+            // and the overlap is larger than maximum overlap, update.
+            max_idx = i;
+            max_gt_idx = j;
+            max_overlap = ov_map.second;
+          }
         }
       }
     }
@@ -667,10 +672,15 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
       break;
     } else {
       CHECK_EQ((*match_indices)[max_idx], -1);
-      (*match_indices)[max_idx] = gt_indices[max_gt_idx];
-      (*match_overlaps)[max_idx] = max_overlap;
-      // Erase the ground truth.
-      gt_pool.erase(max_gt_idx);
+      bool is_ignored_gt = ignore_difficult_gt && gt_bboxes[gt_indices[max_gt_idx]].difficult();
+      if (is_ignored_gt) { //pred matches with ignored gt. set to -2 to ignore
+        (*match_indices)[max_idx] = -2;
+      } else {
+        (*match_indices)[max_idx] = gt_indices[max_gt_idx];
+        (*match_overlaps)[max_idx] = max_overlap;
+        // Erase the ground truth.
+        gt_pool.erase(max_gt_idx);
+      }
     }
   }
 
@@ -680,8 +690,7 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
       break;
     case MultiBoxLossParameter_MatchType_PER_PREDICTION:
       // Get most overlaped for the rest prediction bboxes.
-      for (map<int, map<int, float> >::iterator it = overlaps.begin();
-           it != overlaps.end(); ++it) {
+      for (auto it = overlaps.begin(); it != overlaps.end(); ++it) {
         int i = it->first;
         if ((*match_indices)[i] != -1) {
           // The prediction already has matched ground truth or is ignored.
@@ -689,13 +698,14 @@ void MatchBBox(const vector<NormalizedBBox>& gt_bboxes,
         }
         int max_gt_idx = -1;
         float max_overlap = -1;
-        for (int j = 0; j < num_gt; ++j) {
-          if (it->second.find(j) == it->second.end()) {
+        for (auto ov_map : it->second) {
+          const int j = ov_map.first;
+          if (j >= num_gt) {
             // No overlap between the i-th prediction and j-th ground truth.
             continue;
           }
           // Find the maximum overlapped pair.
-          float overlap = it->second[j];
+          float overlap = ov_map.second;
           if (overlap >= overlap_threshold && overlap > max_overlap) {
             // If the prediction has not been matched to any ground truth,
             // and the overlap is larger than maximum overlap, update.
@@ -773,7 +783,8 @@ void FindMatches(const vector<LabelBBox>& all_loc_preds,
                      all_loc_preds[i].find(label)->second, &loc_bboxes);
         MatchBBox(gt_bboxes, loc_bboxes, label, match_type,
                   overlap_threshold, ignore_cross_boundary_bbox,
-                  &match_indices[label], &match_overlaps[label]);
+                  &match_indices[label], &match_overlaps[label],
+                  multibox_loss_param.ignore_difficult_gt());
       }
     } else {
       // Use prior bboxes to match against all ground truth.
@@ -782,7 +793,7 @@ void FindMatches(const vector<LabelBBox>& all_loc_preds,
       const int label = -1;
       MatchBBox(gt_bboxes, prior_bboxes, label, match_type, overlap_threshold,
                 ignore_cross_boundary_bbox, &temp_match_indices,
-                &temp_match_overlaps);
+                &temp_match_overlaps, multibox_loss_param.ignore_difficult_gt());
       if (share_location) {
         match_indices[label] = temp_match_indices;
         match_overlaps[label] = temp_match_overlaps;

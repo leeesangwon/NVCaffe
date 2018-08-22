@@ -15,7 +15,6 @@ namespace caffe {
 // it improved stability for large models on many GPUs.
 void SyncedMemory::MallocHost(void** ptr, size_t size, bool* use_cuda) {
   if (Caffe::mode() == Caffe::GPU) {
-    shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
     CUDA_CHECK(cudaMallocHost(ptr, size));
     *use_cuda = true;
   } else {
@@ -34,7 +33,6 @@ void SyncedMemory::FreeHost(void* ptr, bool use_cuda) {
 
 SyncedMemory::~SyncedMemory() {
   if (cpu_ptr_ && own_cpu_data_) {
-    shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
     FreeHost(cpu_ptr_, cpu_malloc_use_cuda_);
   }
   if (gpu_ptr_ && own_gpu_data_) {
@@ -50,7 +48,7 @@ SyncedMemory::~SyncedMemory() {
   }
 }
 
-void SyncedMemory::to_cpu(bool copy_from_gpu) {
+void SyncedMemory::to_cpu(bool copy_from_gpu, int group) {
   switch (head_) {
     case UNINITIALIZED:
       MallocHost(&cpu_ptr_, size_, &cpu_malloc_use_cuda_);
@@ -64,7 +62,7 @@ void SyncedMemory::to_cpu(bool copy_from_gpu) {
         own_cpu_data_ = true;
       }
       if (copy_from_gpu) {
-        caffe_gpu_memcpy(size_, gpu_ptr_, cpu_ptr_);
+        caffe_gpu_memcpy(size_, gpu_ptr_, cpu_ptr_, group);
         head_ = SYNCED;
       } else {
         head_ = HEAD_AT_CPU;
@@ -136,8 +134,8 @@ void SyncedMemory::set_gpu_data(void* data) {
   own_gpu_data_ = false;
 }
 
-void* SyncedMemory::mutable_cpu_data(bool copy_from_gpu) {
-  to_cpu(copy_from_gpu);
+void* SyncedMemory::mutable_cpu_data(bool copy_from_gpu, int group) {
+  to_cpu(copy_from_gpu, group);
   head_ = HEAD_AT_CPU;
   return cpu_ptr_;
 }

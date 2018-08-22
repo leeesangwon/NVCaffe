@@ -10,6 +10,7 @@ namespace bp = boost::python;
 #include <boost/algorithm/string.hpp>
 
 #include "caffe/caffe.hpp"
+#include "caffe/parallel.hpp"
 #include "caffe/util/signal_handler.h"
 #include "caffe/util/bbox_util.hpp"
 
@@ -216,10 +217,10 @@ int train() {
     for (int i = 0; i < gpus.size(); ++i) {
       s << (i ? ", " : "") << gpus[i];
     }
+    LOG(INFO) << "Using GPUs " << s.str();
 
     caffe::GPUMemory::Scope gpu_memory_scope(gpus);
 
-    LOG(INFO) << "Using GPUs " << s.str();
     cudaDeviceProp device_prop;
     for (int i = 0; i < gpus.size(); ++i) {
       cudaGetDeviceProperties(&device_prop, gpus[i]);
@@ -230,15 +231,16 @@ int train() {
     solver_param.set_device_id(gpus[0]);
     Caffe::set_mode(Caffe::GPU);
     Caffe::set_gpus(gpus);
-    Caffe::set_solver_count(gpus.size());
-    CHECK_EQ(gpus.size(), Caffe::solver_count());
+    Caffe::set_solver_count(gpus.size() * caffe::P2PManager::global_count());
   }
 
   caffe::SignalHandler signal_handler(
         GetRequestedAction(FLAGS_sigint_effect),
         GetRequestedAction(FLAGS_sighup_effect));
 
-  shared_ptr<caffe::Solver> solver(caffe::SolverRegistry::CreateSolver(solver_param, nullptr, 0));
+  shared_ptr<caffe::Solver> solver(
+      caffe::SolverRegistry::CreateSolver(solver_param, nullptr,
+          gpus.size() * caffe::P2PManager::global_rank()));
   solver->SetActionFunction(signal_handler.GetActionFunction());
 
   if (FLAGS_snapshot.size()) {
@@ -248,9 +250,8 @@ int train() {
     CopyLayers(solver.get(), FLAGS_weights);
   }
 
-  if (gpus.size() > 1) {
-    Caffe::set_solver_count(gpus.size());
-    caffe::P2PManager p2p_mgr(solver, gpus.size(), solver->param());
+  if (gpus.size() > 1 || caffe::P2PManager::global_count() > 1) {
+    caffe::P2PManager p2p_mgr(solver, Caffe::solver_count(), (int)gpus.size(), solver->param());
     p2p_mgr.Run(gpus);
   } else {
     LOG(INFO) << "Starting Optimization";
@@ -264,7 +265,9 @@ int train() {
       LOG(INFO) << os.str();
     }
   }
-  LOG(INFO) << "Optimization Done in " << Caffe::time_from_init();
+  if (caffe::P2PManager::global_rank() == 0) {
+    LOG(INFO) << "Optimization Done in " << Caffe::time_from_init();
+  }
   return 0;
 }
 RegisterBrewFunction(train);
@@ -523,6 +526,14 @@ int test_detection() {
 }
 RegisterBrewFunction(test_detection);
 
+void print_iters(int j, int iters, Timer& iter_timer) {
+  if (j > 0 && (j + 1) % iters == 0) {
+    LOG(INFO) << "Iterations: " << (j - iters + 1) << "-" << (j + 1)
+              << " average forward-backward time: "
+              << iter_timer.MicroSeconds() / (iters * 1000.F) << " ms.";
+    iter_timer.Start();
+  }
+}
 
 // Time: benchmark the execution time of a model.
 int time() {
@@ -557,12 +568,12 @@ int time() {
 
   caffe::SolverParameter solver_param;
   caffe::ReadNetParamsFromTextFileOrDie(FLAGS_model, solver_param.mutable_net_param());
-  solver_param.set_max_iter(kInitIterations);
+  solver_param.set_max_iter(kInitIterations + FLAGS_iterations);
   solver_param.set_lr_policy("fixed");
   solver_param.set_snapshot_after_train(false);
   solver_param.set_base_lr(0.01F);
   solver_param.set_random_seed(1371LL);
-  solver_param.set_test_interval(FLAGS_iterations + 1);
+  solver_param.set_test_interval(kInitIterations + FLAGS_iterations + 1);
   solver_param.set_display(0);
 
   solver_param.mutable_train_state()->set_level(FLAGS_level);
@@ -577,9 +588,9 @@ int time() {
   // Do a number of clean forward and backward pass,
   // so that memory allocation are done,
   // and future iterations will be more stable.
-  Timer init_timer;
-  Timer forward_timer;
-  Timer backward_timer;
+  Timer init_timer(true);
+  Timer forward_timer(true);
+  Timer backward_timer(true);
   double forward_time = 0.0;
   double backward_time = 0.0;
   LOG(INFO) << "Initialization for " << kInitIterations << " iterations.";
@@ -599,16 +610,16 @@ int time() {
 
   LOG(INFO) << "*** Benchmark begins ***";
   LOG(INFO) << "Testing for " << FLAGS_iterations << " iterations.";
-  Timer total_timer;
+  Timer total_timer(true);
   total_timer.Start();
-  Timer timer;
+  Timer timer(true);
   std::vector<double> forward_time_per_layer(layers.size(), 0.0);
   std::vector<double> backward_time_per_layer(layers.size(), 0.0);
   forward_time = 0.0;
   backward_time = 0.0;
+  Timer iter_timer(true);
+  iter_timer.Start();
   for (int j = 0; j < FLAGS_iterations; ++j) {
-    Timer iter_timer;
-    iter_timer.Start();
     forward_timer.Start();
     for (int i = 0; i < layers.size(); ++i) {
       timer.Start();
@@ -624,28 +635,46 @@ int time() {
       backward_time_per_layer[i] += timer.MicroSeconds();
     }
     backward_time += backward_timer.MicroSeconds();
-    LOG(INFO) << "Iteration: " << j + 1 << " forward-backward time: "
-      << iter_timer.MilliSeconds() << " ms.";
+    if (FLAGS_iterations >= 50000) {
+      print_iters(j, 10000, iter_timer);
+    } else if (FLAGS_iterations >= 10000) {
+      print_iters(j, 1000, iter_timer);
+    } else if (FLAGS_iterations >= 1000) {
+      print_iters(j, 100, iter_timer);
+    } else if (FLAGS_iterations >= 100) {
+      print_iters(j, 10, iter_timer);
+    } else {
+      LOG(INFO) << "Iteration: " << (j + 1) << " forward-backward time: "
+                << iter_timer.MicroSeconds() / 1000.F << " ms.";
+      iter_timer.Start();
+    }
   }
   LOG(INFO) << "Average time per layer: ";
   for (int i = 0; i < layers.size(); ++i) {
     const caffe::string& layername = layers[i]->layer_param().name();
     LOG(INFO) << std::setfill(' ') << std::setw(10) << layername <<
-      "\tforward: " << forward_time_per_layer[i] / 1000 /
+      "\tforward: " << forward_time_per_layer[i] / 1000. /
       FLAGS_iterations << " ms.";
     LOG(INFO) << std::setfill(' ') << std::setw(10) << layername  <<
-      "\tbackward: " << backward_time_per_layer[i] / 1000 /
+      "\tbackward: " << backward_time_per_layer[i] / 1000. /
       FLAGS_iterations << " ms.";
   }
   total_timer.Stop();
-  LOG(INFO) << "Average Forward pass: " << forward_time / 1000 /
+  LOG(INFO) << "Average Forward pass: " << forward_time / 1000. /
     FLAGS_iterations << " ms.";
-  LOG(INFO) << "Average Backward pass: " << backward_time / 1000 /
+  LOG(INFO) << "Average Backward pass: " << backward_time / 1000. /
     FLAGS_iterations << " ms.";
   LOG(INFO) << "Average Forward-Backward: " << total_timer.MilliSeconds() /
     FLAGS_iterations << " ms.";
   LOG(INFO) << "Total Time: " << total_timer.MilliSeconds() << " ms.";
   LOG(INFO) << "*** Benchmark ends ***";
+
+  std::string stats = layers.back()->print_stats();  // TODO all layers
+  if (!stats.empty()) {
+    LOG(INFO) << "*** Stats ***";
+    LOG(INFO) << stats;
+  }
+
   return 0;
 }
 RegisterBrewFunction(time);

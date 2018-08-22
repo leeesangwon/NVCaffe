@@ -1,5 +1,7 @@
 #include <climits>
 #include <vector>
+#include <unordered_set>
+
 #if defined(USE_CUDNN)
 #include <caffe/util/cudnn.hpp>
 #endif
@@ -71,24 +73,84 @@ const int* Blob::gpu_shape() const {
 
 void Blob::ShareData(const Blob& other) {
   CHECK_NE(this, &other);
+//  CHECK(!other.IsSharedDataCycled());
   if (data_tensor_.get() == other.data_tensor_.get()) {
+    CHECK_EQ(data_shared_with_, &other);
     return;
   }
   CHECK_EQ(count(), other.count());
   data_tensor_ = other.data_tensor_;
+  data_shared_with_ = &other;
   CHECK(data_type() == other.data_type());
   CHECK(is_current_data_valid());
 }
 
 void Blob::ShareDiff(const Blob& other) {
   CHECK_NE(this, &other);
+///  CHECK(!other.IsSharedDiffCycled());
   if (diff_tensor_.get() == other.diff_tensor_.get()) {
+    CHECK_EQ(diff_shared_with_, &other);
     return;
   }
   CHECK_EQ(count(), other.count());
   diff_tensor_ = other.diff_tensor_;
+  diff_shared_with_ = &other;
   CHECK(diff_type() == other.diff_type());
   CHECK(is_current_diff_valid());
+}
+
+bool Blob::IsSharedDataCycled(const vector<Blob*>& others) {
+  std::unordered_set<const Blob*> node_set;
+  for (auto other : others) {
+    const Blob *data_shared_with = other->data_shared_with_;
+    while (data_shared_with != nullptr) {
+      if (node_set.count(data_shared_with) > 0) {
+        return true;
+      }
+      node_set.insert({data_shared_with});
+      data_shared_with = data_shared_with->data_shared_with_;
+    }
+  }
+  return false;
+}
+
+bool Blob::IsSharedDiffCycled(const vector<Blob*>& others) {
+  std::unordered_set<const Blob*> node_set;
+  for (auto other : others) {
+    const Blob *diff_shared_with = other->diff_shared_with_;
+    while (diff_shared_with != nullptr) {
+      if (node_set.count(diff_shared_with) > 0) {
+        return true;
+      }
+      node_set.insert({diff_shared_with});
+      diff_shared_with = diff_shared_with->diff_shared_with_;
+    }
+  }
+  return false;
+}
+
+bool Blob::IsSharedCycled(const vector<Blob*>& others) {
+  std::unordered_set<const Blob*> node_set;
+  for (auto other : others) {
+    const Blob *data_shared_with = other->data_shared_with_;
+    const Blob *diff_shared_with = other->diff_shared_with_;
+    while (data_shared_with != nullptr ||
+           diff_shared_with != nullptr) {
+      if ((data_shared_with != nullptr && node_set.count(data_shared_with) > 0) ||
+          (diff_shared_with != nullptr && node_set.count(diff_shared_with) > 0)) {
+        return true;
+      }
+      if (data_shared_with != nullptr) {
+        node_set.insert({data_shared_with});
+        data_shared_with = data_shared_with->data_shared_with_;
+      }
+      if (diff_shared_with != nullptr) {
+        node_set.insert({diff_shared_with});
+        diff_shared_with = diff_shared_with->diff_shared_with_;
+      }
+    }
+  }
+  return false;
 }
 
 // The "update" method is used for parameter blobs in a Net, which are stored
@@ -215,14 +277,14 @@ void Blob::CopyFrom(const Blob& source, bool copy_diff, bool reshape,
         // cross copy
         if (srct->is_cpu_head() && dstt->is_gpu_head()) {
           cudaStream_t stream = Caffe::thread_stream(group);
-          CUDA_CHECK(cudaMemcpyAsync(dst->mutable_gpu_data(), src->cpu_data(),
+          CUDA_CHECK(cudaMemcpyAsync(dst->mutable_gpu_data(false, group), src->cpu_data(),
               srct->count_ * tsize(src_type),
               cudaMemcpyHostToDevice, stream));
           CUDA_CHECK(cudaStreamSynchronize(stream));
           break;
         } else if (srct->is_gpu_head() && dstt->is_cpu_head()) {
           cudaStream_t stream = Caffe::thread_stream(group);
-          CUDA_CHECK(cudaMemcpyAsync(dst->mutable_cpu_data(), src->gpu_data(),
+          CUDA_CHECK(cudaMemcpyAsync(dst->mutable_cpu_data(false, group), src->gpu_data(group),
               srct->count_ * tsize(src_type),
               cudaMemcpyDeviceToHost, stream));
           CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -232,7 +294,8 @@ void Blob::CopyFrom(const Blob& source, bool copy_diff, bool reshape,
       // TODO use group
       Tensor::copy_helper(is_gpu, count_,
           is_gpu ? src->gpu_data() : src->cpu_data(), src_type,
-          is_gpu ? dst->mutable_gpu_data() : dst->mutable_cpu_data(), dst_type);
+          is_gpu ? dst->mutable_gpu_data(false, group) : dst->mutable_cpu_data(false, group),
+          dst_type);
     } while (false);
 #if defined(USE_CUDNN)
   } else {
@@ -247,7 +310,7 @@ void Blob::CopyFrom(const Blob& source, bool copy_diff, bool reshape,
     CUDNN_CHECK(cudnnTransformTensor(handle,
         cudnn::one(src_type), src_desc, src->gpu_data(group),
         cudnn::zero(dst_type), dst_desc, dst->mutable_gpu_data(false, group)));
-    CUDA_CHECK(cudaStreamSynchronize(Caffe::thread_stream(group)));
+    CUDA_CHECK_ARG(cudaStreamSynchronize(Caffe::thread_stream(group)), group);
     CUDNN_CHECK(cudnnDestroyTensorDescriptor(src_desc));
     CUDNN_CHECK(cudnnDestroyTensorDescriptor(dst_desc));
   }
@@ -357,7 +420,16 @@ void Blob::FromProto(const BlobProto& proto, bool reshape) {
 
 void Blob::ToProto(BlobProto* proto, bool store_in_old_format, bool write_diff) const {
   if (store_in_old_format) {
-    ToProtoBVLC(proto, write_diff);
+    if (data_type() == tp<float16>()) {
+      TBlob<float> b32;
+      b32.CopyFrom(*this, false, true);
+      if (write_diff) {
+        b32.CopyFrom(*this, true, false);
+      }
+      b32.ToProtoBVLC(proto, write_diff);
+    } else {
+      ToProtoBVLC(proto, write_diff);
+    }
     return;
   }
   CHECK(is_current_data_valid());

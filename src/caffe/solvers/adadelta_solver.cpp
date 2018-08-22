@@ -23,13 +23,10 @@ adadelta_reg_update_and_clear_gpu(int N,
     float local_decay, void* handle, bool clear_grads);
 
 template <typename Dtype>
-float AdaDeltaSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
+void AdaDeltaSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
     bool clear_grads) {
   const vector<shared_ptr<Blob>>& net_params = this->net_->learnable_params();
   shared_ptr<Blob> param = net_params[param_id];
-
-  float wgrad_sq = 1.F;  // stub
-
   shared_ptr<TBlob<Dtype>> history = this->history_[param_id];
   shared_ptr<TBlob<Dtype>> update = this->update_[param_id];
   shared_ptr<TBlob<Dtype>> temp = this->temp_[param_id];
@@ -114,7 +111,6 @@ float AdaDeltaSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, floa
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_sq;
 }
 
 INSTANTIATE_CLASS(AdaDeltaSolver);

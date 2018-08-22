@@ -80,3 +80,6 @@ class TestSolver(unittest.TestCase):
         for fn in files:
             assert os.path.isfile(fn)
             os.remove(fn)
+
+#if __name__ == '__main__':
+#    unittest.main()

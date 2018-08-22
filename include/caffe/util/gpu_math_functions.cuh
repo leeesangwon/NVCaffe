@@ -3,9 +3,10 @@
 
 #include <cuda.h>
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <driver_types.h>
 #include <glog/logging.h>
-#include "math_functions.h"
-#include "driver_types.h"
+
 #include "caffe/common.hpp"
 #include "caffe/util/half.cuh"
 
@@ -61,6 +62,21 @@ half2 hge2(half2 a, half2 b) {
 
   af.x = (af.x >= bf.x) ? 1.f : 0.f;
   af.y = (af.y >= bf.y) ? 1.f : 0.f;
+
+  return float22half2_clip(af);
+#endif
+}
+
+__device__ __inline__
+half2 hle2(half2 a, half2 b) {
+#if __CUDA_ARCH__ >= 530 && !defined(OLD_CUDA_HALF_IMPL)
+  return __hle2(a, b);
+#else
+  float2 af = __half22float2(a);
+  float2 bf = __half22float2(b);
+
+  af.x = (af.x <= bf.x) ? 1.f : 0.f;
+  af.y = (af.y <= bf.y) ? 1.f : 0.f;
 
   return float22half2_clip(af);
 #endif
@@ -131,11 +147,43 @@ void h2_max_replace(volatile half2 *a, half2 b) {
   }
 }
 
+// a <- min(a,b)
+__device__ __inline__
+void h2_min_replace(volatile half2 *a, half2 b) {
+  half2 cmp = hle2(*const_cast<half2*>(a), b);  // 00 01 10 11
+  bool al = cmp.lo();                // true: a.low <= b.low
+  bool ah = cmp.hi();               // true: a.high <= b.high
+  if (al) {
+    if (ah) {
+      // (a.low,a.high)
+    } else {
+      // (a.low,b.high)
+      const_cast<half2*>(a)->set_hi(b.hi());
+    }
+  } else {
+    if (ah) {
+      // (b.low,a.high)
+      const_cast<half2*>(a)->set_lo(b.lo());
+    } else {
+      // (b.low,b.high)
+      *const_cast<half2*>(a) = b;
+    }
+  }
+}
+
 // <- max(a,b)
 __device__ __inline__
 half2 h2_max(half2 a, half2 b) {
   half2 m = a;
   h2_max_replace(&m, b);
+  return m;
+}
+
+// <- min(a,b)
+__device__ __inline__
+half2 h2_min(half2 a, half2 b) {
+  half2 m = a;
+  h2_min_replace(&m, b);
   return m;
 }
 
@@ -217,6 +265,29 @@ __device__ __inline__
 double tmax<half2, double>(half2 a, half2 b) {
   float2 fm = __half22float2(h2_max(a, b));
   return tmax<float, float>(fm.x, fm.y);
+}
+
+template<typename T, typename TR>
+__device__ __inline__
+TR tmin(T a, T b) {
+  return TR(a < b ? a : b);
+}
+template<>
+__device__ __inline__
+half2 tmin<half2, half2>(half2 a, half2 b) {
+  return h2_min(a, b);
+}
+template<>
+__device__ __inline__
+float tmin<half2, float>(half2 a, half2 b) {
+  float2 fm = __half22float2(h2_min(a, b));
+  return tmin<float, float>(fm.x, fm.y);
+}
+template<>
+__device__ __inline__
+double tmin<half2, double>(half2 a, half2 b) {
+  float2 fm = __half22float2(h2_min(a, b));
+  return tmin<float, float>(fm.x, fm.y);
 }
 
 template<typename T, typename TR>

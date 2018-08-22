@@ -54,6 +54,7 @@ class SoftmaxWithLossLayer : public LossLayer<Ftype, Btype> {
   explicit SoftmaxWithLossLayer(const LayerParameter& param)
       : LossLayer<Ftype, Btype>(param) {
      prob_ = Blob::create<Ftype>();
+     label_smoothing_ = 0.;
   }
   virtual void LayerSetUp(const vector<Blob*>& bottom,
       const vector<Blob*>& top);
@@ -123,8 +124,10 @@ class SoftmaxWithLossLayer : public LossLayer<Ftype, Btype> {
   int ignore_label_;
   /// How to normalize the output loss.
   LossParameter_NormalizationMode normalization_;
-
+  TBlob<Ftype> loss_data_;
   int softmax_axis_, outer_num_, inner_num_;
+
+  Ftype label_smoothing_;
 };
 
 }  // namespace caffe

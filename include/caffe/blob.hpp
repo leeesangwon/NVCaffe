@@ -40,13 +40,17 @@ class Blob {
     std::swap(shape_data_, other.shape_data_);
     std::swap(shape_, other.shape_);
     std::swap(count_, other.count_);
+    std::swap(data_shared_with_, other.data_shared_with_);
+    std::swap(diff_shared_with_, other.diff_shared_with_);
   }
 
  protected:
   Blob(Type data_type, Type diff_type)
       : data_tensor_(make_shared<Tensor>(data_type)),
         diff_tensor_(make_shared<Tensor>(diff_type)),
-        count_(0) {}
+        count_(0),
+        data_shared_with_(nullptr),
+        diff_shared_with_(nullptr) {}
   explicit Blob(Type dtype)
       : Blob(dtype, dtype) {}
 
@@ -75,9 +79,7 @@ class Blob {
   void Reshape(const BlobShape& shape);
 
   void ReshapeLike(const Blob* other) {
-// TODO   if (this->shape() != other->shape()) {
-      Reshape(other->shape());
-//    }
+    Reshape(other->shape());
   }
 
   void ReshapeLike(const Blob& other) {
@@ -90,18 +92,6 @@ class Blob {
 
   Type diff_type() const {
     return diff_tensor_->type();
-  }
-
-  bool diff_equals(const Blob& other) const {
-    return diff_tensor_ == other.diff_tensor_;
-  }
-
-  void allocate_data(bool on_gpu = true) {
-    data_tensor_->current_memory(on_gpu);
-  }
-
-  void allocate_diff(bool on_gpu = true) {
-    diff_tensor_->current_memory(on_gpu);
   }
 
   /**
@@ -167,14 +157,6 @@ class Blob {
     CopyFrom(source, true, reshape, pk_from, pk_to, group);
   }
 
-  bool is_data_empty() const {
-    return data_tensor_->is_empty();
-  }
-
-  bool is_diff_empty() const {
-    return diff_tensor_->is_empty();
-  }
-
   std::string shape_string() const {
     std::ostringstream stream;
     for (size_t i = 0; i < shape_.size(); ++i) {
@@ -199,7 +181,7 @@ class Blob {
   }
 
   int num_axes() const {
-    return shape_.size();
+    return (int)shape_.size();
   }
 
   int count() const {
@@ -560,6 +542,10 @@ class Blob {
     }
   }
 
+  static bool IsSharedDataCycled(const vector<Blob*>& others);
+  static bool IsSharedDiffCycled(const vector<Blob*>& others);
+  static bool IsSharedCycled(const vector<Blob*>& others);
+
   DISABLE_COPY_MOVE_AND_ASSIGN(Blob);
 
  protected:
@@ -568,6 +554,9 @@ class Blob {
   shared_ptr<SyncedMemory> shape_data_;
   vector<int> shape_;
   int count_;
+
+  const Blob* data_shared_with_;
+  const Blob* diff_shared_with_;
 
   bool is_current_data_valid() const {
     return data_tensor_->is_current_valid();

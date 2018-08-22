@@ -61,7 +61,6 @@ class InternalThread {
  protected:
   int target_device_;
   size_t rank_;
-  void* aux_;
 
   /* Implement this method in your subclass
       with the code you want your thread to run. */
@@ -75,7 +74,7 @@ class InternalThread {
   }
 
  private:
-  void entry(int thread_id, int device, Caffe::Brew mode, uint64_t rand_seed, int solver_count,
+  void entry(int thread_id, int device, Caffe::Brew mode, uint64_t rand_seed,
       size_t rank, bool set_cpu_affinity);
 
   vector<boost::thread> threads_;

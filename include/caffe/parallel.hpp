@@ -6,6 +6,10 @@
 
 #include <vector>
 
+#ifdef USE_MPI
+#include <mpi.h>
+#endif
+
 #include "caffe/blob.hpp"
 #include "caffe/common.hpp"
 #include "caffe/internal_thread.hpp"
@@ -46,23 +50,34 @@ class P2PSync;
 
 class P2PManager {
  public:
-  P2PManager(shared_ptr<Solver> root_solver, int nranks, const SolverParameter& param);
+  P2PManager(shared_ptr<Solver> root_solver, int nranks, int devices, const SolverParameter& param);
+  ~P2PManager();
 
   void Run(const vector<int>& gpus);
   void EarlyCancel(P2PSync* killed);
 
-  static void dl_bar_wait() {
-    dl_bar->wait();
+#ifdef USE_NCCL
+  const ncclUniqueId& nccl_id() {
+    return nccl_id_;
   }
-  static void bar_wait() {
-    bar->wait();
+#endif
+
+  void bar_wait() {
+    bar_.wait();
   }
-  static void rbar_wait(int type_id) {
-    if (type_id == 0) {
-      rbar0->wait();
-    } else {
-      rbar1->wait();
-    }
+
+  static void Init(int *argc, char ***argv);
+
+  static int global_rank() {
+    return global_rank_;
+  }
+
+  static int global_count() {
+    return global_count_;
+  }
+
+  static const char* host_name() {
+    return host_name_;
   }
 
  protected:
@@ -73,11 +88,11 @@ class P2PManager {
 #ifdef USE_NCCL
   ncclUniqueId nccl_id_;
 #endif
+  boost::barrier bar_;
 
-  static unique_ptr<boost::barrier> dl_bar;  // DataLayer sync helper
-  static unique_ptr<boost::barrier> bar;
-  static unique_ptr<boost::barrier> rbar0;
-  static unique_ptr<boost::barrier> rbar1;
+  static int global_rank_;
+  static int global_count_;
+  static char host_name_[_POSIX_HOST_NAME_MAX + 1];
 };
 
 // Synchronous data parallelism using map-reduce between local GPUs.
@@ -91,15 +106,14 @@ class P2PSync : public Solver::Callback, public InternalThread {
   // Divide the batch size by the number of solvers
   static unsigned int divide_batch_size(NetParameter* net);
 
-  void allreduce(int type_id, int param_id) override;
-  void allreduce_bucket(int type_id, size_t count, void* bucket, Type type) override;
+  void allreduce(int param_id) override;
+  void allreduce_bucket(size_t count, void* bucket, Type type) override;
   void soft_barrier() override;
-  void reduce_barrier(int type_id) override;
   void saveTestResults(float loss, const vector<float>& scores) override;
   void aggregateTestResults(float* loss, vector<float>* scores) override;
 
-  cudaStream_t comm_stream(int type_id) {
-    return comm_stream_[type_id]->get();
+  cudaStream_t comm_stream() const override {
+    return comm_stream_->get();
   }
 
  protected:
@@ -115,7 +129,7 @@ class P2PSync : public Solver::Callback, public InternalThread {
   const int initial_iter_;
   shared_ptr<Solver> solver_, root_solver_;
   SolverParameter solver_param_;
-  shared_ptr<CudaStream> comm_stream_[2];
+  shared_ptr<CudaStream> comm_stream_;
 
   // memory shared between threads
   shared_ptr<SharedScores<float>> shared_;

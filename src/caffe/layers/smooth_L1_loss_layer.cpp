@@ -36,6 +36,8 @@ void SmoothL1LossLayer<Ftype, Btype>::Reshape(
       bottom[0]->height(), bottom[0]->width());
   errors_.Reshape(bottom[0]->num(), bottom[0]->channels(),
       bottom[0]->height(), bottom[0]->width());
+  diff_.set_data(0.F);
+  errors_.set_data(0.F);
 }
 
 template <typename Ftype, typename Btype>

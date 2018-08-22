@@ -317,6 +317,7 @@ class Caffe {
   // including boost/thread.hpp to avoid a boost/NVCC issues (#1009, #1010)
   // on OSX. Also fails on Linux with CUDA 7.0.18.
   static Caffe& Get();
+  static void Delete();
 
   enum Brew { CPU, GPU };
 
@@ -421,10 +422,15 @@ class Caffe {
   // Search from start_id to the highest possible device ordinal,
   // return the ordinal of the first available device.
   static int FindDevice(const int start_id = 0);
+  /// All physical devices regardless of usage
   static int device_count();
   // Parallel training info
   static int solver_count() {
     return solver_count_;
+  }
+  /// NUmber of physical devices being used
+  static int device_in_use_per_host_count() {
+    return (int)gpus_.size();
   }
   static void set_solver_count(int val) {
     if (solver_count_ != val) {
@@ -432,8 +438,8 @@ class Caffe {
       solver_count_ = val;
     }
   }
-  static bool root_solver() { return Get().root_solver_; }
-  static void set_root_solver(bool val) { Get().root_solver_ = val; }
+  static bool root_solver() { return Get().is_root_solver_; }
+  static void set_root_solver(bool val) { Get().is_root_solver_ = val; }
   static int restored_iter() { return restored_iter_; }
   static void set_restored_iter(int val);
 
@@ -479,6 +485,7 @@ class Caffe {
     return props().device_capability(device);
   }
   static int current_device() {
+    std::lock_guard<std::mutex> lock(cd_mutex_);
     int device = 0;
     cudaGetDevice(&device);
     return device;
@@ -510,7 +517,7 @@ class Caffe {
 #endif
 
   shared_ptr<RNG> random_generator_;
-  bool root_solver_;
+  bool is_root_solver_;
   const int device_;
 
   // Default device chosen by a user and associated with the main thread.
@@ -522,7 +529,8 @@ class Caffe {
   static int thread_count_;
   static int restored_iter_;
   static std::atomic<uint64_t> root_seed_;
-  static std::mutex caffe_mutex_, pstream_mutex_, cublas_mutex_, cudnn_mutex_, seed_mutex_;
+  static std::mutex cd_mutex_, caffe_mutex_, pstream_mutex_, cublas_mutex_,
+      cudnn_mutex_, seed_mutex_;
   static std::unordered_map<std::uint64_t, std::shared_ptr<Caffe>> thread_instance_map_;
 
   static std::atomic<size_t> epoch_count_;

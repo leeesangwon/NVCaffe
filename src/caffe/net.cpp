@@ -4,6 +4,10 @@
 #include <boost/thread.hpp>
 #include <hdf5.h>
 
+#ifdef USE_MPI
+#include <mpi.h>
+#endif
+
 #include "caffe/common.hpp"
 #include "caffe/layer.hpp"
 #include "caffe/net.hpp"
@@ -115,9 +119,8 @@ void Net::Init(const NetParameter& in_param) {
     LOG(INFO) << "Using " << Type_Name(default_bmath) << " as default backward math type";
   }
 
-  wgrad_sq_.store(0LL);
+  wgrad_max_ = 0.F;
   global_grad_scale_coeff_ = 1.F;
-  has_global_grad_scale_param_ = in_param.has_global_grad_scale();
   global_grad_scale_param_ = in_param.global_grad_scale();
   global_grad_scale_adaptive_ = in_param.global_grad_scale_adaptive();
 
@@ -398,7 +401,7 @@ void Net::Init(const NetParameter& in_param) {
   learnable_space_size_[0] = 0UL;
   learnable_space_size_[1] = 0UL;
   reduce_buckets_ = (size_t) in_param.reduce_buckets();
-  if (Caffe::device_count() > 0) {
+  if (Caffe::device_in_use_per_host_count() > 0) {
     LOG_IF(INFO, Caffe::root_solver())
         << "Top memory (" << Phase_Name(phase_) << ") required for data: "
         << gpu_top_memory_data_use_ << " diff: " << gpu_top_memory_diff_use_;
@@ -754,30 +757,21 @@ void Net::BackwardFromToAu(int start, int end, bool apply_update) {
       const int param_id = layer_index_params_[make_pair(i, j)];
       if (param_owners_[param_id] < 0) {
         const int lparam_id = learnable_param_ids_[param_id];
-        int t = (int)learnable_params_[lparam_id]->diff_type();
-        for (int type_id = 0; type_id < learnable_types().size(); ++type_id) {
-          if (t == learnable_types_[type_id]) {
-            reduction_queue_[type_id].push(lparam_id);
-            break;
-          }
-        }
+        reduction_queue_.push(lparam_id);
       }  // leave it to the owner otherwise
     }
   }
   if (apply_update) {
-    for (int type_id = 0; type_id < learnable_types_.size(); ++type_id) {
-      reduction_queue_[type_id].push(END_OF_ITERATION);
-    }
+    reduction_queue_.push(END_OF_ITERATION);
   }
 }
 
 void Net::Finalize() {
-  for (int type_id = 0; type_id < learnable_types_.size(); ++type_id) {
-    reduction_queue_[type_id].push(END_OF_TRAIN);
-  }
+  reduction_queue_.push(END_OF_TRAIN);
 }
 
-size_t Net::received_contiguous_count(int type_id, const std::set<int>& au_ids, int& id_from_ret) {
+size_t Net::received_contiguous_count(int type_id, const std::set<int>& au_ids,
+                                      int& id_from_ret) const {
   if (learnable_params_.empty() || au_ids.empty() || param_id_vecs_.empty()) {
     return 0;
   }
@@ -809,25 +803,17 @@ size_t Net::received_contiguous_count(int type_id, const std::set<int>& au_ids, 
   return cnt_ret;
 }
 
-void Net::ReduceAndUpdate(int type_id) {
+void Net::ReduceAndUpdate() {
   DLOG(INFO) << "[" << Caffe::current_device()
-             << "] Entering ReduceAndUpdate thread " << lwp_id()
-             <<  ", type_id " << type_id;
-
+             << "] Entering ReduceAndUpdate thread " << lwp_id();
   size_t bucket_size = 0UL;
-  cublasHandle_t handle = Caffe::cublas_handle(type_id);
-  CHECK_GE(reduce_buckets_, 0);
-  if (Caffe::solver_count() > 1 && reduce_buckets_ > 0) {
-    bucket_size = align_up<6>(learnable_space_size_[type_id] / reduce_buckets_);
-  }
-  std::set<int> au_ids;
-
+  std::set<int> au_ids[2];
   const bool clip_grads = solver_->param().clip_gradients() >= 0.F;
   const bool clear_grads = !solver_->param().snapshot_diff() && !clip_grads;
   const bool use_buckets = reduce_buckets_ > 0;
   float rate = -1.F;
-  while (!solver_->stop_reducing_requested(type_id)) {
-    const int param_id = reduction_queue_[type_id].pop();
+  while (!solver_->stop_reducing_requested()) {
+    const int param_id = reduction_queue_.pop();
     SolverAction::Enum request = solver_->GetRequestedAction();
     if (SolverAction::STOP == request) {
       solver_->request_early_exit();
@@ -836,38 +822,56 @@ void Net::ReduceAndUpdate(int type_id) {
     if (param_id == END_OF_TRAIN) {
       break;
     }
+
+    int type_id = 0;
+    if (param_id >= 0) {
+      int t = (int) learnable_params_[param_id]->diff_type();
+      for (int tid = 0; tid < learnable_types().size(); ++tid) {
+        if (t == learnable_types_[tid]) {
+          type_id = tid;
+          break;
+        }
+      }
+    }
+    cublasHandle_t handle = Caffe::cublas_handle(1);
+    CHECK_GE(reduce_buckets_, 0);
+    if (Caffe::device_in_use_per_host_count() > 1 && reduce_buckets_ > 0) {
+      bucket_size = align_up<6>(learnable_space_size_[type_id] / reduce_buckets_);
+    }
+
     if (rate < 0.F) {
       rate = solver_->GetLearningRate();
     }
     if (param_id != END_OF_ITERATION) {
       if (Caffe::solver_count() > 1) {
         if (!use_buckets && !clip_grads) {
-          Reduce(type_id, param_id);
-          if (solver_->stop_reducing_requested(type_id)) {
+          Reduce(param_id);
+          if (solver_->stop_reducing_requested()) {
             break;
           }
-          add_wgrad_sq(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
+          solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads);
           continue;
         }
       } else {
         if (!clip_grads) {
           this->learnable_params()[param_id]->scale_diff(1.F / global_grad_scale(), handle);
-          add_wgrad_sq(solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads));
+          solver_->ApplyUpdate(param_id, handle, rate, true, clear_grads);
         }
         continue;
       }
     } else if (clip_grads && Caffe::solver_count() == 1) {
-      solver_->ClipGradientsAndNormalize(handle, type_id, au_ids);
-      for (int i : au_ids) {
-        add_wgrad_sq(solver_->ApplyUpdate(i, handle, rate, false, clear_grads));
+      solver_->ClipGradientsAndNormalize(handle, type_id, au_ids[type_id]);
+      for (int i : au_ids[type_id]) {
+        solver_->ApplyUpdate(i, handle, rate, false, clear_grads);
       }
-      au_ids.clear();
+      au_ids[type_id].clear();
     }
 
-    if (!learnable_params_.empty() && Caffe::solver_count() > 1) {
+    bool pass0 = true;
+    while (!learnable_params_.empty() && Caffe::solver_count() > 1) {
       int id_from = -1;
       // Is bucket big enough? Done with iteration?
-      const size_t received_count = received_contiguous_count(type_id, au_ids, id_from);
+      const size_t received_count = received_contiguous_count(type_id, au_ids[type_id], id_from);
       if (id_from >= 0) {
         const size_t received_size = received_count * lp_size(id_from);
         if ((received_size >= bucket_size && !clip_grads) || param_id == END_OF_ITERATION) {
@@ -884,94 +888,91 @@ void Net::ReduceAndUpdate(int type_id) {
 //          }
 //#endif
           CHECK_EQ((int) learnable_params_[id_from]->diff_type(), learnable_types_[type_id]);
-          ReduceBucket(type_id, received_count, learnable_params_[id_from]->diff_type(),
+          ReduceBucket(received_count, learnable_params_[id_from]->diff_type(),
               learnable_params_ptrs_[type_id][id_from]);
-          if (solver_->stop_reducing_requested(type_id)) {
+          if (solver_->stop_reducing_requested()) {
             break;
           }
-
           if (clip_grads) {
-            solver_->ClipGradientsAndNormalize(handle, type_id, au_ids);
+            solver_->ClipGradientsAndNormalize(handle, type_id, au_ids[type_id]);
           }
-
-          for (int i : au_ids) {
-            add_wgrad_sq(solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads));
+          for (int i : au_ids[type_id]) {
+            solver_->ApplyUpdate(i, handle, rate, !clip_grads, clear_grads);
           }
-          au_ids.erase(au_ids.find(id_from), au_ids.end());
+          au_ids[type_id].erase(au_ids[type_id].find(id_from), au_ids[type_id].end());
         }
       }
+      if (pass0 && param_id == END_OF_ITERATION) {
+        type_id = type_id == 0 ? 1 : 0;
+        pass0 = false;
+        if (au_ids[type_id].empty()) {
+          break;
+        }
+        continue;  // to process leftovers for other type
+      }
+      break;
     }
     if (param_id == END_OF_ITERATION) {
-      CHECK(au_ids.empty());
+      CHECK(au_ids[0].empty());
+      CHECK(au_ids[1].empty());
       rate = -1.F;
-      solver_->iteration_complete_signal(type_id);
+      solver_->iteration_complete_signal();
     } else {
-      au_ids.emplace(param_id);
+      au_ids[type_id].insert(param_id);
     }
   }
-  DLOG(INFO) << "[" << Caffe::current_device()
-             << "] Leaving ReduceAndUpdate thread " << lwp_id();
+  DLOG(INFO) << print_current_device() << " Leaving ReduceAndUpdate thread " << lwp_id();
 }
 
-void Net::add_wgrad_sq(float wgrad_sq) {
-  if (wgrad_sq > 0.F) {
-    wgrad_sq_.fetch_add(std::llround(wgrad_sq * GRAD_FACTOR));
+void Net::update_wgrad_max(const Blob* param, int type_id) {
+  float wgrad_max = param->amax_diff(type_id);
+  if (std::isnan(wgrad_max) || std::isinf(wgrad_max)) {
+    wgrad_max = 0.F;  // skip this TODO warning
   }
-}
-
-float Net::wgrad_sq() {
-  return wgrad_sq_.exchange(0LL) / GRAD_FACTOR;
+  if (wgrad_max > wgrad_max_) {
+    wgrad_max_ = wgrad_max;
+  }
 }
 
 void Net::update_grad_scale() {
   global_grad_scale_coeff_ = 1.F;
   if (global_grad_scale_enabled()) {
     if (global_grad_scale_adaptive_) {
-      const float wgsq = wgrad_sq();
-      if (wgsq > 0.F) {
-        global_grad_scale_coeff_ = std::sqrt(wgsq) * global_grad_scale_param_;
-        return;
-      }
+      const float f = wgrad_max_ > 0.F ? 4.F / wgrad_max_ : 1.F;
+      global_grad_scale_coeff_ = f * global_grad_scale_param_;
+      wgrad_max_ = 0.F;
+    } else {
+      global_grad_scale_coeff_ = global_grad_scale_param_;
     }
-    global_grad_scale_coeff_ = global_grad_scale_param_;
   }
 }
 
-void Net::Reduce(int type_id, int param_id) {
+void Net::Reduce(int param_id) {
+  this->learnable_params()[param_id]->scale_diff(1.F / global_grad_scale(),  // TODO
+      Caffe::cublas_handle(1));
+#ifdef USE_NCCL
   Solver::Callback* cb = solver_->callback();
-  cb->reduce_barrier(type_id);
-  {
-    unique_ptr<unique_lock<shared_mutex>> lock;
-    if (solver_->is_root()) {
-      lock.reset(new unique_lock<shared_mutex>(GPUMemory::read_write_mutex()));
-    }
-    cb->reduce_barrier(type_id);
-    cb->allreduce(type_id, param_id);
-    cb->reduce_barrier(type_id);
-  }
-  this->learnable_params()[param_id]->
-      scale_diff(1.F / (Caffe::solver_count() * global_grad_scale()),
-      Caffe::cublas_handle(type_id));
-  // Also need to barrier to make sure lock isn't undone
-  // until all have completed, but the current nature of
-  // NCCL makes this unnecessary.
-  // solver_->callback()->reduce_barrier();
+  NCCL_CHECK(ncclGroupStart());
+  cb->allreduce(param_id);
+  NCCL_CHECK(ncclGroupEnd());
+  CUDA_CHECK(cudaStreamSynchronize(cb->comm_stream()));
+#endif
+  this->learnable_params()[param_id]->scale_diff(1.F / Caffe::solver_count(),
+      Caffe::cublas_handle(1));
 }
 
-void Net::ReduceBucket(int type_id, size_t count, Type bucket_type, void* bucket) {
+void Net::ReduceBucket(size_t count, Type bucket_type, void* bucket) {
+  Tensor::gpu_scal(count, bucket_type, bucket, 1.F / global_grad_scale(),
+      Caffe::cublas_handle(1));
+#ifdef USE_NCCL
   Solver::Callback* cb = solver_->callback();
-  cb->reduce_barrier(type_id);
-  {
-    unique_ptr<unique_lock<shared_mutex>> lock;
-    if (solver_->is_root()) {
-      lock.reset(new unique_lock<shared_mutex>(GPUMemory::read_write_mutex()));
-    }
-    cb->reduce_barrier(type_id);
-    cb->allreduce_bucket(type_id, count, bucket, bucket_type);
-    cb->reduce_barrier(type_id);
-  }
-  Tensor::gpu_scal(count, bucket_type, bucket, 1.F / (Caffe::solver_count() * global_grad_scale()),
-      Caffe::cublas_handle(type_id));
+  NCCL_CHECK(ncclGroupStart());
+  cb->allreduce_bucket(count, bucket, bucket_type);
+  NCCL_CHECK(ncclGroupEnd());
+  CUDA_CHECK(cudaStreamSynchronize(cb->comm_stream()));
+#endif
+  Tensor::gpu_scal(count, bucket_type, bucket, 1.F / Caffe::solver_count(),
+      Caffe::cublas_handle(1));
 }
 
 void Net::ForwardDebugInfo(const int layer_id) {
@@ -1137,13 +1138,12 @@ void Net::CopyTrainedLayersFrom(const NetParameter& param) {
     LOG(INFO) << "Copying source layer " << source_layer_name << " Type:"
               << source_layer_type << " #blobs=" << source_layer.blobs_size();
     // check if BN is in legacy DIGITS format?
-    if (source_layer_type == "BatchNorm" && source_layer.blobs_size() == 5) {
+    if (source_layer_type == "BatchNorm") {
       for (int j = 0; j < target_blobs.size(); ++j) {
         const bool kReshape = true;
         target_blobs[j]->FromProto(source_layer.blobs(j), kReshape);
-        DLOG(INFO) << target_blobs[j]->count();
       }
-      if (target_blobs[4]->count() == 1) {
+      if (source_layer.blobs_size() == 5 && target_blobs[4]->count() == 1) {
         // old format: 0 - scale , 1 - bias,  2 - mean , 3 - var, 4 - reserved
         // new format: 0 - mean  , 1 - var,  2 - reserved , 3- scale, 4 - bias
         LOG(INFO) << "BN legacy DIGITS format detected ... ";
@@ -1153,6 +1153,17 @@ void Net::CopyTrainedLayersFrom(const NetParameter& param) {
         std::swap(target_blobs[2], target_blobs[4]);
         std::swap(target_blobs[3], target_blobs[4]);
         LOG(INFO) << "BN Transforming to new format completed.";
+      }
+      if (source_layer.blobs_size() == 3) {
+        const float scale_factor = target_blobs[2]->cpu_data<float>()[0] == 0.F ?
+                                   0.F : 1.F / target_blobs[2]->cpu_data<float>()[0];
+        caffe_cpu_scale(target_blobs[0]->count(), scale_factor,
+                        target_blobs[0]->cpu_data<float>(),
+                        target_blobs[0]->mutable_cpu_data<float>());
+        caffe_cpu_scale(target_blobs[1]->count(), scale_factor,
+                        target_blobs[1]->cpu_data<float>(),
+                        target_blobs[1]->mutable_cpu_data<float>());
+        target_blobs[2]->mutable_cpu_data<float>()[0] = 1.F;
       }
     } else {
       for (int j = 0; j < target_blobs.size(); ++j) {
@@ -1380,9 +1391,9 @@ void Net::InitializeLearnableDiffSpace(int type_id) {
   CHECK_LT(type_id, 2);
   const Type t = (Type) learnable_types_[type_id];
   if (learnable_params_ptrs_[type_id].size() == learnable_params_.size()) {
-    LOG(INFO) << print_current_device() << " Already reserved "
-              << learnable_space_size_[type_id] << " bytes of shared learnable space for type "
-              << Type_Name(t);
+    LOG_IF(INFO, learnable_space_size_[type_id] > 0) << print_current_device()
+        << " Already reserved " << learnable_space_size_[type_id]
+        << " bytes of shared learnable space for type " << Type_Name(t);
     return;
   }
   learnable_space_size_[type_id] = 0UL;
@@ -1458,6 +1469,17 @@ const vector<Type>& Net::learnable_types(bool reset) {
     CHECK_LE(learnable_types_.size(), 2);
   }
   return learnable_types_;
+}
+
+std::string Net::print_current_device() const {
+  std::ostringstream os;
+  os << (phase_ == TRAIN ? "[" : "(");
+  if (P2PManager::global_count() > 0) {
+    os << P2PManager::global_rank() << ".";
+  }
+  os << Caffe::current_device()
+     << (phase_ == TRAIN ? "]" : ")");
+  return os.str();
 }
 
 }  // namespace caffe

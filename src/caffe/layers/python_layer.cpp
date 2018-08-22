@@ -1,6 +1,8 @@
 #ifdef WITH_PYTHON_LAYER
 #include "caffe/layers/python_layer.hpp"
 
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+
 namespace caffe {
 
 void PyErrReportAndForward() {

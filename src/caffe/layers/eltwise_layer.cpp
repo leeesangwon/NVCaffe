@@ -25,15 +25,16 @@ void EltwiseLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
     }
   }
   stable_prod_grad_ = this->layer_param_.eltwise_param().stable_prod_grad();
+  bshared_ = !Blob::IsSharedDataCycled(bottom);
+  tshared_ = !Blob::IsSharedDiffCycled(top);
 }
 
 template <typename Ftype, typename Btype>
 void EltwiseLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
       const vector<Blob*>& top) {
   const Net* pnet = this->parent_net();
-  // Inner nets are usually cyclic
   no_coeffs_ = pnet != nullptr && !pnet->inner_net();
-  for (int i = 0; i < bottom.size(); ++i) {
+  for (int i = 0; i < bottom.size() && no_coeffs_; ++i) {
     no_coeffs_ = no_coeffs_ && coeffs_[i] == 1.F;
   }
   for (int i = 1; i < bottom.size(); ++i) {
@@ -46,10 +47,14 @@ void EltwiseLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
     max_idx_.Reshape(bottom[0]->shape());
   }
   if (op_ == EltwiseParameter_EltwiseOp_SUM && no_coeffs_) {
-    for (int i = 0; i < bottom.size(); ++i) {
-      bottom[i]->ShareDiff(*top[0]);
+    if (tshared_) {
+      for (int i = 0; i < bottom.size(); ++i) {
+        bottom[i]->ShareDiff(*top[0]);
+      }
     }
-    top[0]->ShareData(*bottom[0]);
+    if (bshared_) {
+      top[0]->ShareData(*bottom[0]);
+    }
   }
 }
 
@@ -69,7 +74,7 @@ void EltwiseLayer<Ftype, Btype>::Forward_cpu(
     }
     break;
   case EltwiseParameter_EltwiseOp_SUM:
-    if (no_coeffs_) {
+    if (bshared_ && no_coeffs_) {
       for (int i = 1; i < bottom.size(); ++i) {
         caffe_axpy(count, Ftype(1), bottom[i]->cpu_data<Ftype>(), top_data);
       }
@@ -147,6 +152,8 @@ void EltwiseLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       case EltwiseParameter_EltwiseOp_SUM:
         if (!no_coeffs_) {
           caffe_cpu_scale(count, Btype(coeffs_[i]), top_diff, bottom_diff);
+        } else if (!tshared_) {
+          caffe_copy(count, top_diff, bottom_diff);
         }
         break;
       case EltwiseParameter_EltwiseOp_MAX:

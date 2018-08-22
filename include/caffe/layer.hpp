@@ -141,6 +141,9 @@ class LayerBase {
   Net* parent_net() {
     return parent_net_;
   }
+  const Net* parent_net() const {
+    return parent_net_;
+  }
 
   const Solver* parent_solver() const;
 
@@ -355,6 +358,14 @@ class LayerBase {
     net_inititialized_flag_ = init_flag;
   }
 
+  Type forward_type() const {
+    return layer_param_.forward_type();
+  }
+
+  Type backward_type() const {
+    return layer_param_.backward_type();
+  }
+
   /**
    * Some layers need to be initialized after first iteration
    * They should override this function and return a flag
@@ -372,6 +383,10 @@ class LayerBase {
    * @brief Writes the layer parameter to a protocol buffer
    */
   virtual void ToProto(LayerParameter* param, bool write_diff = false) = 0;
+
+  virtual std::string print_stats() const {
+    return "";
+  }
 
   std::string print_current_device() const;
 
@@ -559,10 +574,31 @@ inline float Layer<Ftype, Btype>::Forward(const vector<Blob*>& bottom, const vec
       for (int top_id = 0; top_id < top.size(); ++top_id) {
         if (this->loss(top_id) == 0.F) { continue; }
         const int count = top[top_id]->count();
-        const Ftype* data = top[top_id]->gpu_data<Ftype>();
-        const Ftype* loss_weights = top[top_id]->gpu_diff<Ftype>();
         float blob_loss = 0.F;
-        caffe_gpu_dot(count, data, loss_weights, &blob_loss);
+        if (count < 4) {
+          const Ftype* data = top[top_id]->cpu_data<Ftype>();
+          const Ftype* loss_weights = top[top_id]->cpu_diff<Ftype>();
+          for (int i = 0; i < count; ++i) {
+            blob_loss += (float)data[i] * (float)loss_weights[i];
+
+//            if (std::isnan(blob_loss)) {
+//              LOG(ERROR) << " ****** Forward CPU Layer '" << name()
+//                         << "' of type " << type()
+//                         << ", FT " << Type_Name(forward_type())
+//                         << " BT " << Type_Name(backward_type())
+//                  << " iter " << this->iter()
+//                         << " returned loss: " << loss
+//                         << " count: " << count
+//                         << " blob_loss: " << blob_loss;
+//              return blob_loss;
+//            }
+//
+          }
+        } else {
+          const Ftype *data = top[top_id]->gpu_data<Ftype>();
+          const Ftype *loss_weights = top[top_id]->gpu_diff<Ftype>();
+          caffe_gpu_dot(count, data, loss_weights, &blob_loss);
+        }
         loss += blob_loss;
       }
       break;

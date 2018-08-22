@@ -96,7 +96,7 @@ class Net {
    * a forward pass, e.g. to compute output feature size.
    */
   void Reshape();
-  void ReduceAndUpdate(int type_id);
+  void ReduceAndUpdate();
 
   float ForwardBackward(bool apply_update = true);
 
@@ -285,22 +285,16 @@ class Net {
   }
 
   bool global_grad_scale_enabled() const {
-    return has_global_grad_scale_param_ && global_grad_scale_param_ > 0.F;
+    return global_grad_scale_adaptive_ || global_grad_scale_param_ != 1.F;
   }
 
   bool inner_net() const {
     return inner_net_;
   }
 
+  void update_wgrad_max(const Blob* param, int type_id);
   void update_grad_scale();
-
-  std::string print_current_device() const {
-    std::ostringstream os;
-    os << (phase_ == TRAIN ? "[" : "(")
-       << Caffe::current_device()
-       << (phase_ == TRAIN ? "]" : ")");
-    return os.str();
-  }
+  std::string print_current_device() const;
 
   template <typename Ftype, typename Btype>
   size_t prefetch_bytes() {
@@ -335,10 +329,10 @@ class Net {
   /// @brief Helper for displaying debug info in Update.
   void UpdateDebugInfo(const int param_id);
   /// @brief Multi-GPU reduction for a particular parameter.
-  void Reduce(int type_id, int param_id);
+  void Reduce(int param_id);
   /// @brief Multi-GPU reduction for a particular bucket of parameters.
-  void ReduceBucket(int type_id, size_t count, Type bucket_type, void* bucket);
-  size_t received_contiguous_count(int type_id, const std::set<int>& au_ids, int& from);
+  void ReduceBucket(size_t count, Type bucket_type, void* bucket);
+  size_t received_contiguous_count(int type_id, const std::set<int>& au_ids, int& from) const;
 
   size_t lp_aligned_count(int id) const {
     return align_up<6>((size_t)learnable_params_[id]->count());
@@ -347,9 +341,6 @@ class Net {
   size_t lp_size(int id) const {
     return tsize(learnable_params_[id]->diff_type());
   }
-
-  void add_wgrad_sq(float wgrad_sq);
-  float wgrad_sq();
 
   /// @brief The network name
   string name_;
@@ -432,19 +423,16 @@ class Net {
   /// Pointer to the solver being used with this net
   Solver* solver_;
   size_t solver_rank_;
-  BlockingQueue<int> reduction_queue_[2];
+  BlockingQueue<int> reduction_queue_;
   Flag* solver_init_flag_;
   vector<Flag*> layer_inititialized_flags_;
   NetParameter net_param_;
 
   size_t infer_count_;
-  std::atomic_llong wgrad_sq_;
-  float global_grad_scale_coeff_, global_grad_scale_param_;
-  bool has_global_grad_scale_param_, global_grad_scale_adaptive_;
+  float wgrad_max_, global_grad_scale_coeff_, global_grad_scale_param_;
+  bool global_grad_scale_adaptive_;
   /// Inner net runs on singe GPU (see recurrent layers)
   const bool inner_net_;
-
-  static constexpr float GRAD_FACTOR = 1.E6F;
 
   static constexpr int END_OF_ITERATION = -1;
   static constexpr int END_OF_TRAIN = -2;

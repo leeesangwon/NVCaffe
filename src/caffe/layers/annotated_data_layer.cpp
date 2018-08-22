@@ -35,8 +35,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
   if (this->auto_mode()) {
     if (!sample_areader_) {
       sample_areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-          Caffe::solver_count(),
-          this->rank_,
+          Caffe::device_in_use_per_host_count(),
+          this->rank_ % Caffe::device_in_use_per_host_count(),
           this->parsers_num_,
           this->threads_num(),
           batch_size,
@@ -47,8 +47,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
           false);
     } else if (!areader_) {
       areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-          Caffe::solver_count(),
-          this->rank_,
+          Caffe::device_in_use_per_host_count(),
+          this->rank_ % Caffe::device_in_use_per_host_count(),
           this->parsers_num_,
           this->threads_num(),
           batch_size,
@@ -60,8 +60,8 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
     }
   } else if (!areader_) {
     areader_ = std::make_shared<DataReader<AnnotatedDatum>>(param,
-        Caffe::solver_count(),
-        this->rank_,
+        Caffe::device_in_use_per_host_count(),
+        this->rank_ % Caffe::device_in_use_per_host_count(),
         this->parsers_num_,
         this->threads_num(),
         batch_size,
@@ -156,7 +156,7 @@ void AnnotatedDataLayer<Ftype, Btype>::DataLayerSetUp(
 
 // This function is called on prefetch thread
 template <typename Ftype, typename Btype>
-void AnnotatedDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
+bool AnnotatedDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
   const bool sample_only = this->sample_only_.load();
   TBlob<Ftype> transformed_datum;
 
@@ -329,6 +329,7 @@ void AnnotatedDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, s
 //    batch->set_data_packing(packing); todo
   batch->set_id(current_batch_id);
   this->sample_only_.store(false);
+  return true;
 }
 
 INSTANTIATE_CLASS_FB(AnnotatedDataLayer);

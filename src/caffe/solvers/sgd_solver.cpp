@@ -21,14 +21,14 @@ namespace caffe {
 // where base_lr, max_iter, gamma, step, stepvalue and power are defined
 // in the solver parameter protocol buffer, and iter is the current iteration.
 template<typename Dtype>
-float SGDSolver<Dtype>::GetLearningRate() {
+float SGDSolver<Dtype>::GetLearningRate() const {
   float rate;
   const string& lr_policy = this->param_.lr_policy();
   const float min_lr = this->param_.min_lr();
   CHECK_GE(min_lr, 0.F);
   if (this->iter_ < this->param_.rampup_interval()) {
     float alpha = float(this->iter_) / this->param_.rampup_interval();
-    float rampup_lr = 0.;
+    float rampup_lr = 0.F;
     if (this->param_.has_rampup_lr()) {
       rampup_lr = this->param_.rampup_lr();
     }
@@ -37,9 +37,9 @@ float SGDSolver<Dtype>::GetLearningRate() {
     rate = this->param_.base_lr();
   } else if (lr_policy == "step") {
     this->current_step_ = this->iter_ / this->param_.stepsize();
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->current_step_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->current_step_);
   } else if (lr_policy == "exp") {
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->iter_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->iter_);
   } else if (lr_policy == "inv") {
     rate = this->param_.base_lr() *
            pow(1.F + this->param_.gamma() * float(this->iter_), -this->param_.power());
@@ -50,7 +50,7 @@ float SGDSolver<Dtype>::GetLearningRate() {
       LOG(INFO) << "MultiStep Status: Iteration " << this->iter_ << ", step = "
                 << this->current_step_;
     }
-    rate = this->param_.base_lr() * pow(this->param_.gamma(), this->current_step_);
+    rate = this->param_.base_lr() * std::pow(this->param_.gamma(), this->current_step_);
   } else if (lr_policy == "poly") {
     float base_lr = this->param_.base_lr();
     CHECK_GE(base_lr, min_lr);
@@ -70,7 +70,7 @@ float SGDSolver<Dtype>::GetLearningRate() {
 }
 
 template<typename Dtype>
-float SGDSolver<Dtype>::GetMomentum() {
+float SGDSolver<Dtype>::GetMomentum() const {
   float moment;
   float base_momentum = this->param_.momentum();
   const string& momentum_policy = this->param_.momentum_policy();
@@ -101,8 +101,10 @@ float SGDSolver<Dtype>::GetWeightDecay() const {
   const string& wd_policy = this->param_.weight_decay_policy();
   float weight_decay = wd;
   if (wd_policy == "poly") {
+    float max_wd  = this->param_.max_weight_decay();
     float power = this->param_.weight_decay_power();
-    weight_decay = wd * pow(float(this->iter_)/this->param_.max_iter(), power);
+    weight_decay = wd + (max_wd - wd) * std::pow(
+        static_cast<float>(this->iter_) / this->param_.max_iter(), power);
   }
   return weight_decay;
 }
@@ -129,6 +131,12 @@ void SGDSolver<Dtype>::PreSolve() {
     history_.emplace_back(boost::make_shared<TBlob<Dtype>>(shape));
     update_.emplace_back(boost::make_shared<TBlob<Dtype>>(shape));
     temp_.emplace_back(boost::make_shared<TBlob<Dtype>>(shape));
+  }
+
+  const size_t N = net_params.size();
+  larc_g_corr_.resize(N);
+  for (size_t i = 0; i < N; ++i) {
+    larc_g_corr_[i] = 0.F;
   }
 }
 
@@ -169,20 +177,23 @@ void SGDSolver<Dtype>::PrintRate(float rate) {
     }
     float moment = GetMomentum();
     float wd = GetWeightDecay();
-    LOG(INFO) << "Iteration " << this->iter_ << ", lr = " << rate << ", m = " << moment
-              << ", wd = " << wd  << ", gs = " << f_round2(net_->global_grad_scale());
+    LOG_IF(INFO, rank_ == 0) << net_->print_current_device()
+        << " Iteration " << this->iter_
+        << ", lr = " << rate << ", m = " << moment
+        << ", lrm = " << rate / (1.F- moment)
+        << ", wd = " << wd  << ", gs = " << f_round2(net_->global_grad_scale());
   }
 }
 
 // Note: this is asynchronous call
 template<typename Dtype>
-float SGDSolver<Dtype>::ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
+void SGDSolver<Dtype>::ApplyUpdate(int param_id, void* handle, float rate, bool normalize,
     bool clear_grads) {
   if (normalize) {
     Normalize(param_id, handle);
   }
   Regularize(param_id);
-  return ComputeUpdateValue(param_id, handle, rate, clear_grads);
+  ComputeUpdateValue(param_id, handle, rate, clear_grads);
 }
 
 template<typename Dtype>
@@ -231,7 +242,7 @@ void sgd_reg_update_all_and_clear_gpu(int N,
     void* handle, bool clear_grads);
 
 template<typename Dtype>
-float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
+void SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rate,
     bool clear_grads) {
   if (this->param_.debug_info()) {
     PrintParams(param_id);
@@ -239,11 +250,9 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
   Blob* param = this->net_->learnable_params()[param_id].get();
   TBlob<Dtype>* history = history_[param_id].get();
   float momentum = GetMomentum();
-  float wgrad_sq = 0.F;
-
   const bool larc = this->param_.larc();
   const string& larc_policy = this->param_.larc_policy();
-  float local_rate = GetLocalRate(param_id, wgrad_sq);
+  float local_rate = GetLocalRate(param_id);
   if (larc) {
     if (larc_policy == "scale") {
       local_rate = rate * local_rate;
@@ -257,7 +266,6 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
   }
 
   // Compute the update to history, then copy it to the parameter diff.
-
   if (Caffe::mode() == Caffe::CPU) {
     caffe_cpu_axpby<Dtype>(param->count(), local_rate, param->cpu_diff<Dtype>(), momentum,
         history->mutable_cpu_data());
@@ -303,44 +311,57 @@ float SGDSolver<Dtype>::ComputeUpdateValue(int param_id, void* handle, float rat
   } else {
     LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
   }
-  return wgrad_sq;
 }
 
 template<typename Dtype>
-float SGDSolver<Dtype>::GetLocalRate(int param_id, float& wgrad_sq) const {
+float SGDSolver<Dtype>::GetLocalRate(int param_id) {
   const vector<float>& net_params_lr = this->net_->params_lr();
   float local_lr = net_params_lr[param_id];
   if (this->net_->global_grad_scale_enabled() || this->param_.larc()) {
     shared_ptr<Blob> param = this->net_->learnable_params()[param_id];
+    const int N = param->count();
     const int type_id = net_->learnable_types()[0] == param->diff_type() ? 0 : 1;
-    wgrad_sq = param->sumsq_diff(type_id);
-    if (std::isnan(wgrad_sq)) {
-      wgrad_sq = 0.F;  // skip this
+    if (!is_precise(this->net_->learnable_params()[param_id]->diff_type())) {
+      this->net_->update_wgrad_max(this->net_->learnable_params()[param_id].get(), type_id);
     }
     if (this->param_.larc()) {
-      const float wgrad_norm = std::sqrt(wgrad_sq);
+      const float wgrad_norm = std::sqrt(param->sumsq_diff(type_id));
       const float w_norm = std::sqrt(param->sumsq_data(type_id));
-      const float gw_ratio = this->param_.larc_eta();
+      const float larc_eta = this->param_.larc_eta();
+      const float momentum = this->GetMomentum();
       float rate = 1.F;
       if (w_norm > 0.F && wgrad_norm > 0.F) {
-        //float weight_decay = this->param_.weight_decay();
-        //rate = gw_ratio * w_norm / (wgrad_norm + weight_decay * w_norm);
-        rate = gw_ratio * w_norm / wgrad_norm;
+        rate = (1.F - momentum) * larc_eta * w_norm / wgrad_norm;
       }
+
+      if (this->param_.larc_turbo())  {
+        float g_m_dot;
+        TBlob<Dtype>* hist = this->history_[param_id].get();
+        caffe_gpu_dot<Dtype>(N, param->gpu_diff<Dtype>(), hist->gpu_data(), &g_m_dot);
+        float m_norm = std::sqrt(hist->sumsq_data(type_id));
+        float g_corr = 0.F;
+        if ((wgrad_norm > 0.) && (m_norm > 0.)) {
+          g_corr = g_m_dot  / (wgrad_norm * m_norm);
+        }
+        float larc_beta = 0.95F;  // TODO
+        larc_g_corr_[param_id]= larc_beta * larc_g_corr_[param_id] + (1.F-larc_beta) * g_corr;
+        rate = rate - 0.9F * larc_g_corr_[param_id];
+      }
+
       if (local_lr > 0.) {
         local_lr = rate;
       }
-#ifdef DEBUG
-      if (Caffe::root_solver()
-          && this->param_.display()
-          && (this->iter_ % this->param_.display() == 0)) {
-        const int layer_id = this->net_->param_layer_indices(param_id).first;
-        const string &layer_name = this->net_->layer_names()[layer_id];
-        const int blob_id = this->net_->param_layer_indices(param_id).second;
-        LOG(INFO) << layer_name << "." << blob_id << " lr=" << local_lr
-                  << " " << "\t  w=" << w_norm << "\t dw=" << wgrad_norm;
-      }
-#endif
+//#ifdef DEBUG
+//      if (Caffe::root_solver()
+//          && this->param_.display()
+//          && (this->iter_ % this->param_.display() == 0)) {
+//        const int layer_id = this->net_->param_layer_indices(param_id).first;
+//        const string &layer_name = this->net_->layer_names()[layer_id];
+//        const int blob_id = this->net_->param_layer_indices(param_id).second;
+//        LOG(INFO) << layer_name << "." << blob_id << " lr=" << local_lr
+//                  << " " << "\t  w=" << w_norm << "\t dw=" << wgrad_norm;
+//      }
+//#endif
     }
   }
   return local_lr;

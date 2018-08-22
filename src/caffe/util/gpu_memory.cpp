@@ -15,8 +15,8 @@ const unsigned int GPUMemory::Manager::MIN_BIN = 6;
 const unsigned int GPUMemory::Manager::MAX_BIN = 22;
 const size_t GPUMemory::Manager::MAX_CACHED_BYTES = (size_t) -1;
 const size_t GPUMemory::Manager::MAX_CACHED_SIZE = (1 << GPUMemory::Manager::MAX_BIN);  // 4M
-shared_mutex GPUMemory::mutex_;
-mutex GPUMemory::ws_mutex_init_;
+std::mutex GPUMemory::ws_mutex_init_;
+std::mutex GPUMemory::dev_info_mutex_;
 
 GPUMemory::Manager GPUMemory::mgr_;
 
@@ -24,7 +24,7 @@ vector<shared_ptr<GPUMemory::Workspace>> GPUMemory::workspace_(GPUMemory::WS_INI
 vector<shared_ptr<GPUMemory::Workspace>> GPUMemory::weights_workspace_(GPUMemory::WS_INITIAL_SIZE);
 
 // To be called for every device
-void GPUMemory::Init() {
+void GPUMemory::InitWorkspaces() {
   std::lock_guard<std::mutex> lock(ws_mutex_init_);
   const int device = Caffe::current_device();
   if (device + 1 > workspace_.size()) {
@@ -99,7 +99,7 @@ void GPUMemory::Manager::init(const vector<int>& gpus, bool debug) {
   CHECK(cub_allocator_);
   for (int i = 0; i < gpus.size(); ++i) {
     update_dev_info(gpus[i]);
-    update_thresholds_[gpus[i]] = dev_info_[gpus[i]].total_;
+    update_thresholds_[gpus[i]] = dev_info_[gpus[i]].total_ * 9UL / 10UL;
   }
   initialized_ = true;
   LOG(INFO) << "GPUMemory::Manager initialized";
@@ -142,8 +142,6 @@ bool GPUMemory::Manager::try_allocate(void** ptr, size_t size, int device,
   CHECK_EQ(current_device(), device);
   cudaError_t status = cudaSuccess, last_err = cudaSuccess;
   {
-    // wait for "writers" like NCCL and potentially others
-    shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
     size_t size_allocated = 0;
     // Clean Cache & Retry logic is inside now
     status = cub_allocator_->DeviceAllocate(device, ptr, size, pstream->get(), size_allocated);
@@ -159,7 +157,8 @@ bool GPUMemory::Manager::try_allocate(void** ptr, size_t size, int device,
       if (size_allocated > 0) {
         if (dev_info_[device].free_ < update_thresholds_[device]) {
           update_dev_info(device);
-          update_thresholds_[device] *= 0.9F;  // every 10% decrease
+          update_thresholds_[device] =
+              update_thresholds_[device] * 9UL / 10UL;  // every 10% decrease
         } else if (dev_info_[device].free_ < size_allocated) {
           update_dev_info(device);
         } else {
@@ -207,8 +206,6 @@ void GPUMemory::Manager::deallocate(void* ptr, int device) {
   if (ptr == nullptr || cub_allocator_ == nullptr) {
     return;
   }
-  // wait for "writers" like NCCL and potentially others...
-  shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
   int current_device;  // Just to check CUDA status:
   cudaError_t status = cudaGetDevice(&current_device);
   // Preventing dead lock while Caffe shutting down.
@@ -222,25 +219,20 @@ void GPUMemory::Manager::deallocate(void* ptr, int device) {
 }
 
 void GPUMemory::Manager::update_dev_info(int device) {
-  const int initial_device = current_device();
+  std::lock_guard<std::mutex> lock(dev_info_mutex_);
   if (device + 1 > dev_info_.size()) {
     dev_info_.resize(device + 1);
   }
-  CUDA_CHECK(cudaSetDevice(device));
-//  CUDA_CHECK(cudaFree(nullptr));  // initialize the context at start up
   cudaDeviceProp props;
   CUDA_CHECK(cudaGetDeviceProperties(&props, device));
   CUDA_CHECK(cudaMemGetInfo(&dev_info_[device].free_, &dev_info_[device].total_));
-
   // Make sure we don't have more than total device memory.
   dev_info_[device].total_ = std::min(props.totalGlobalMem, dev_info_[device].total_);
   dev_info_[device].free_ = std::min(dev_info_[device].total_, dev_info_[device].free_);
-  CUDA_CHECK(cudaSetDevice(initial_device));
 }
 
 std::string GPUMemory::Manager::report_dev_info(int device) {
   cudaDeviceProp props;
-  shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
   CUDA_CHECK(cudaGetDeviceProperties(&props, device));
   DevInfo dev_info;
   CUDA_CHECK(cudaMemGetInfo(&dev_info.free_, &dev_info.total_));
@@ -268,13 +260,11 @@ void GPUMemory::Manager::GetInfo(size_t* free_mem, size_t* total_mem, bool with_
 
 GPUMemory::PinnedBuffer::PinnedBuffer(size_t size) {
   CHECK_GT(size, 0);
-  shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
   CUDA_CHECK(cudaHostAlloc(&hptr_, size, cudaHostAllocMapped));
   CUDA_CHECK(cudaHostGetDevicePointer(&dptr_, hptr_, 0));
 }
 
 GPUMemory::PinnedBuffer::~PinnedBuffer() {
-  shared_lock<shared_mutex> lock(GPUMemory::read_write_mutex());
   CUDA_CHECK(cudaFreeHost(hptr_));
 }
 

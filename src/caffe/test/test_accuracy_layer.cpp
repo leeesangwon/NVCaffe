@@ -275,7 +275,7 @@ TYPED_TEST(AccuracyLayerTest, TestForwardCPUPerClass) {
     }
   }
   EXPECT_NEAR(this->blob_top_->data_at(0, 0, 0, 0),
-              num_correct_labels / 100.0, 1e-4);
+              num_correct_labels / 100.0, tol<TypeParam>(1e-4, 2e-2));
   if (sizeof(TypeParam) >= 4) {
     for (int i = 0; i < num_class; ++i) {
       TypeParam accuracy_per_class = (num_per_class[i] > 0 ?

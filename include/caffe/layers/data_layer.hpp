@@ -49,7 +49,7 @@ class DataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
 
  protected:
   void InitializePrefetch() override;
-  void load_batch(Batch* batch, int thread_id, size_t queue_id = 0UL) override;
+  bool load_batch(Batch* batch, int thread_id, size_t queue_id = 0UL) override;
   size_t queue_id(size_t thread_id) const override;
 
   void init_offsets();

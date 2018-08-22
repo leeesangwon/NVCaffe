@@ -73,7 +73,8 @@ void Caffe::Delete() {
     --thread_count_;
     DLOG(INFO) << "[" << current_device()
                << "] Caffe instance " << it->second.get()
-               << " deleted, count " << thread_count_ << ", thread " << lwp_id() << ", tid " << utid;
+               << " deleted, count " << thread_count_ << ", thread "
+               << lwp_id() << ", tid " << utid;
     thread_instance_map_.erase(it);
   }
 }

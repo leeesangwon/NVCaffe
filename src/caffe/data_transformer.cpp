@@ -1106,9 +1106,13 @@ void DataTransformer<Dtype>::CropImage(const cv::Mat& img,
   int h_off = static_cast<int>(scaled_bbox.ymin());
   int width = static_cast<int>(scaled_bbox.xmax() - scaled_bbox.xmin());
   int height = static_cast<int>(scaled_bbox.ymax() - scaled_bbox.ymin());
-  cv::Rect bbox_roi(w_off, h_off, width, height);
 
-  img(bbox_roi).copyTo(*crop_img);
+  if(w_off == 0 && h_off == 0 && width == img_width && height == img_height) {
+    img.copyTo(*crop_img);
+  } else {
+    cv::Rect bbox_roi(w_off, h_off, width, height);
+    img(bbox_roi).copyTo(*crop_img);
+  }
 }
 
 template <typename Dtype>

@@ -8,6 +8,9 @@
 
 #ifdef USE_NCCL
 #include "caffe/util/nccl.hpp"
+#ifndef NCCL_MAJOR
+#error "NCCL_MAJOR is not defined. Please check NCCL installation"
+#endif
 #define CAFFE_NCCL_VER (NCCL_MAJOR*10000 + NCCL_MINOR*100)
 #endif
 

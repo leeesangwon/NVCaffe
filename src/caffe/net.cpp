@@ -912,6 +912,9 @@ void Net::ReduceAndUpdate() {
       }
       break;
     }
+    if (solver_->stop_reducing_requested()) {
+      break;
+    }
     if (param_id == END_OF_ITERATION) {
       CHECK(au_ids[0].empty());
       CHECK(au_ids[1].empty());

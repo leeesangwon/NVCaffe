@@ -150,7 +150,7 @@ def gridbox_to_boxes(net_cvg, net_boxes, self):
     cell_width = im_sz_x / grid_sz_x
     cell_height = im_sz_y / grid_sz_y
 
-    cvg_val = net_cvg[0][0:grid_sz_y][0:grid_sz_x]
+    cvg_val = net_cvg[0, 0:grid_sz_y, 0:grid_sz_x]
 
     if (self.is_groundtruth):
         mask = (cvg_val > 0)

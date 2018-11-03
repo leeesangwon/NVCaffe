@@ -467,7 +467,7 @@ DetectNetTransformationLayer<Dtype>::transform_hsv_cpu(
   // Use CV_32F since cvtColor doesn't support CV_64F
   cv::Mat_<cv::Vec<float, 3> > result = orig;
   cvtColor(result, result, COLOR_BGR2HSV);
-  vector<Mat1v> channels(3);
+  vector<Mat> channels(3);
   cv::split(result, channels);
   // Perform transformations
   if (as.doHueRotation()) {

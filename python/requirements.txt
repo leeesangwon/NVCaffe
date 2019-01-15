@@ -13,7 +13,6 @@ pydotplus
 python-dateutil>=2
 python-gflags>=2.0
 pyyaml>=3.10
-django==1.11.15
 Pillow>=3.3.0,<=4.3.0
 six>=1.5.2,<=1.10.0
 image>=1.5.16

@@ -710,6 +710,7 @@ message LayerParameter {
   // NVIDIA PARAMETERS (Start with 68 because NV is 68 on an old-style phone)
   optional DetectNetGroundTruthParameter detectnet_groundtruth_param = 6801;
   optional DetectNetAugmentationParameter detectnet_augmentation_param = 6802;
+  optional InterpParameter interp_param = 3001;
 }
 
 // Message that stores parameters used to apply transformation
@@ -1589,6 +1590,16 @@ message InnerProductParameter {
   // of the weight matrix. The weight matrix itself is not going to be transposed
   // but rather the transfer flag of operations will be toggled accordingly.
   optional bool transpose = 6 [default = false];
+}
+
+message InterpParameter {
+  // For PSPNet
+  optional int32 height = 1 [default = 0]; // Height of output
+  optional int32 width = 2 [default = 0]; // Width of output
+  optional int32 zoom_factor = 3 [default = 1]; // zoom factor
+  optional int32 shrink_factor = 4 [default = 1]; // shrink factor
+  optional int32 pad_beg = 5 [default = 0]; // padding at begin of input
+  optional int32 pad_end = 6 [default = 0]; // padding at end of input
 }
 
 message InputParameter {

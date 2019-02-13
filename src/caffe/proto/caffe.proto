@@ -1590,6 +1590,16 @@ message ImageDataParameter {
   // In multi-node training it's helpful sometimes to limit amount of data used by a node.
   // Set to 2 to cut it by half after first shuffle (ignored if shuffle is off, TRAIN only).
   optional float dataset_share_per_node = 17 [default = 1];
+
+  // For PSPNet
+  // This is the value set for pixels or images where we don't know the label
+  optional int32 ignore_label = 3001 [default = 255];
+  enum LabelType {
+    NONE = 0;
+    IMAGE = 1;
+    PIXEL = 2;
+  }
+  optional LabelType label_type = 3002 [default = IMAGE];
 }
 
 message InfogainLossParameter {

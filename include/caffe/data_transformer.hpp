@@ -55,6 +55,10 @@ class DataTransformer {
   vector<int> Transform(const Datum* datum, Dtype* buf, size_t buf_len,
       Packing& out_packing, bool repack = true);
 
+  void TransformImgAndSeg(const std::vector<cv::Mat>& cv_img_seg,
+    TBlob<Dtype>* transformed_data_blob, TBlob<Dtype>* transformed_label_blob,
+    const int ignore_label);
+
   /**
    * @brief Applies transformations defined in the image data layer's
    * transform_param block to the data.

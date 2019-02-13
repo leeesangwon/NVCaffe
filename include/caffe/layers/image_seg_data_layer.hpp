@@ -15,29 +15,77 @@
 
 namespace caffe {
 
-template <typename Dtype>
-class ImageSegDataLayer : public ImageDimPrefetchingDataLayer<Dtype> {
+template <typename Ftype, typename Btype>
+class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
  public:
-  explicit ImageSegDataLayer(const LayerParameter& param)
-    : ImageDimPrefetchingDataLayer<Dtype>(param) {}
+  ImageSegDataLayer(const LayerParameter& param, size_t solver_rank);
   virtual ~ImageSegDataLayer();
-  virtual void DataLayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
+  void DataLayerSetUp(const vector<Blob*>& bottom, const vector<Blob*>& top) override;
 
-  virtual inline const char* type() const { return "ImageSegData"; }
-  virtual inline int ExactNumBottomBlobs() const { return 0; }
-  virtual inline int ExactNumTopBlobs() const { return 3; }
-  virtual inline bool AutoTopBlobs() const { return true; }
+  bool ShareInParallel() const override {
+    return false;
+  }
+  const char* type() const override {
+    return "ImageSegData";
+  }
+  int ExactNumBottomBlobs() const override {
+    return 0;
+  }
+  int ExactNumTopBlobs() const override {
+    return 3;
+  }
+  bool AutoTopBlobs() const override {
+    return true;
+  }
 
  protected:
-  virtual void ShuffleImages();
-  virtual void load_batch(Batch<Dtype>* batch);
+  void ShuffleImages();
+  bool load_batch(Batch* batch, int thread_id, size_t queue_id = 0UL) override;
+  void start_reading() override {}
+  void InitializePrefetch() override;
 
-  Blob<Dtype> transformed_label_;
+  bool auto_mode const override {
+    return false;
+  }
+
+  Flag* layer_inititialized_flag() override {
+    return this->phase_ == TRAIN ? &layer_inititialized_flag_ : nullptr;
+  }
+
+  std::vector<cv::Mat> next_mat_vector(const string& root_folder, const string& filename, 
+                                       int height, int width, bool is_color, int short_side, 
+                                       bool& from_cache, const int label_type, const int ignore_label);
+
+  const size_t id_;  // per layer per phase
   shared_ptr<Caffe::RNG> prefetch_rng_;
-  vector<std::pair<std::string, std::string> > lines_;
-  int lines_id_;
+  Flag layer_inititialized_flag_;
+  size_t epoch_count_;
+  vector<size_t> line_ids_;
+
+  static vector<vector<std::pair<std::string, std::string>>> lines_;  // per id_
+  static vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>>> cache_;
+  static vector<std::mutex> cache_mutex_;
+  static vector<bool> cached_;
+  static vector<size_t> cached_num_, failed_num_;
+  static vector<float> cache_progress_;
 };
+
+#define MAX_IDL_CACHEABLE (2UL * Phase_ARRAYSIZE)
+
+template <typename Ftype, typename Btype>
+vector<vector<std::pair<std::string, std::string>>> ImageSegDataLayer<Ftype, Btype>::lines_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<unordered_map<std::string, cv::Mat>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<bool> ImageSegDataLayer<Ftype, Btype>::cached_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<size_t> ImageSegDataLayer<Ftype, Btype>::cached_num_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<size_t> ImageSegDataLayer<Ftype, Btype>::failed_num_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<std::mutex> ImageSegDataLayer<Ftype, Btype>::cache_mutex_(MAX_IDL_CACHEABLE);
+template <typename Ftype, typename Btype>
+vector<float> ImageSegDataLayer<Ftype, Btype>::cache_progress_(MAX_IDL_CACHEABLE);
 
 }  // namespace caffe
 

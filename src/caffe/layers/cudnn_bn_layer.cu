@@ -9,9 +9,9 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void CuDNNBNLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
-    const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void CuDNNBNLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
+    const vector<Blob*>& top) {
   const Dtype* bottom_data = bottom[0]->gpu_data();
   Dtype* top_data = top[0]->mutable_gpu_data();
   const Dtype* scale_data = this->blobs_[0]->gpu_data();
@@ -50,11 +50,11 @@ void CuDNNBNLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   }
 }
 
-template <typename Dtype>
-void CuDNNBNLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
-    const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+template <typename Ftype, typename Btype>
+void CuDNNBNLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
+    const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
    if (this->frozen_){
-     BNLayer<Dtype>::Backward_gpu(top, propagate_down, bottom);
+     BNLayer<Ftype, Btype>::Backward_gpu(top, propagate_down, bottom);
      return;
    }
   if (propagate_down[0] || this->param_propagate_down_[0] ||

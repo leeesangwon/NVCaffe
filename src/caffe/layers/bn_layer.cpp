@@ -7,9 +7,9 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void BNLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
   frozen_ = this->layer_param_.bn_param().frozen();
   bn_momentum_ = this->layer_param_.bn_param().momentum();
   bn_eps_ = this->layer_param_.bn_param().eps();
@@ -24,21 +24,21 @@ void BNLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
     shape.push_back(1);
     shape.push_back(1);
     // slope
-    this->blobs_[0].reset(new Blob<Dtype>(shape));
+    this->blobs_[0].reset(new TBlob<Dtype>(shape));
     shared_ptr<Filler<Dtype> > slope_filler(GetFiller<Dtype>(
         this->layer_param_.bn_param().slope_filler()));
     slope_filler->Fill(this->blobs_[0].get());
     // bias
-    this->blobs_[1].reset(new Blob<Dtype>(shape));
+    this->blobs_[1].reset(new TBlob<Dtype>(shape));
     shared_ptr<Filler<Dtype> > bias_filler(GetFiller<Dtype>(
         this->layer_param_.bn_param().bias_filler()));
     bias_filler->Fill(this->blobs_[1].get());
     // moving average mean
-    this->blobs_[2].reset(new Blob<Dtype>(shape));
+    this->blobs_[2].reset(new TBlob<Dtype>(shape));
     caffe_set(this->blobs_[2]->count(), Dtype(0),
         this->blobs_[2]->mutable_cpu_data());
     // moving average variance
-    this->blobs_[3].reset(new Blob<Dtype>(shape));
+    this->blobs_[3].reset(new TBlob<Dtype>(shape));
     caffe_set(this->blobs_[3]->count(), frozen_ ? Dtype(1) : Dtype(0),
         this->blobs_[3]->mutable_cpu_data());
   }
@@ -66,9 +66,9 @@ void BNLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   }
 }
 
-template <typename Dtype>
-void BNLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
   num_ = bottom[0]->num();
   channels_ = bottom[0]->channels();
   height_ = bottom[0]->height();
@@ -91,9 +91,9 @@ void BNLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
       batch_sum_multiplier_.mutable_cpu_data());
 }
 
-template <typename Dtype>
-void BNLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
-  const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
+  const vector<Blob*>& top) {
   const Dtype* const_bottom_data = bottom[0]->cpu_data();
   const Dtype* const_top_data = top[0]->cpu_data();
   Dtype* top_data = top[0]->mutable_cpu_data();
@@ -208,9 +208,9 @@ void BNLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
       broadcast_buffer_.cpu_data(), top_data);
 }
 
-template <typename Dtype>
-void BNLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
-  const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
+  const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (frozen_) {
     if (propagate_down[0]) {
       const Dtype* const_top_diff = top[0]->cpu_diff();

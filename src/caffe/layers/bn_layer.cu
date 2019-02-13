@@ -7,9 +7,9 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void BNLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
-  const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
+  const vector<Blob*>& top) {
   const Dtype* const_bottom_data = bottom[0]->gpu_data();
   const Dtype* const_top_data = top[0]->gpu_data();
   Dtype* top_data = top[0]->mutable_gpu_data();
@@ -122,9 +122,9 @@ void BNLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
       broadcast_buffer_.gpu_data(), top_data);
 }
 
-template <typename Dtype>
-void BNLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
-  const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+template <typename Ftype, typename Btype>
+void BNLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
+  const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (frozen_) {
     if (propagate_down[0]) {
       const Dtype* const_top_diff = top[0]->gpu_diff();

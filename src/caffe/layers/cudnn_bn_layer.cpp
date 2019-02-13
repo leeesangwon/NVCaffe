@@ -9,10 +9,10 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void CuDNNBNLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
-  BNLayer<Dtype>::LayerSetUp(bottom, top);
+template <typename Ftype, typename Btype>
+void CuDNNBNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
+  BNLayer<Ftype, Btype>::LayerSetUp(bottom, top);
   save_mean_.ReshapeLike(*(this->blobs_[2]));
   save_inv_variance_.ReshapeLike(*(this->blobs_[3]));
 
@@ -26,9 +26,9 @@ void CuDNNBNLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   LOG(INFO)<<"using cuDNN BN engine";
 }
 
-template <typename Dtype>
-void CuDNNBNLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void CuDNNBNLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
   // Do not call BNLayer::Reshape function as some members are unnecessary
   this->num_ = bottom[0]->num();
   this->channels_ = bottom[0]->channels();
@@ -61,8 +61,8 @@ void CuDNNBNLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   }
 }
 
-template <typename Dtype>
-CuDNNBNLayer<Dtype>::~CuDNNBNLayer() {
+template <typename Ftype, typename Btype>
+CuDNNBNLayer<Ftype, Btype>::~CuDNNBNLayer() {
   // Check that handles have been setup before destroying.
   if (!handles_setup_) { return; }
 

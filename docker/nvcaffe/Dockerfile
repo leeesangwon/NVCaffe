@@ -3,12 +3,14 @@ FROM nvcr.io/nvidia/caffe:19.01-py2
 # Bring in changes from outside container to /tmp
 # (assume caffe-refinedet-modifications.patch is in same directory as Dockerfile)
 COPY nvcaffe-refinedet-modifications.patch /tmp
+COPY nvcaffe-refinedet-modifications.2.patch /tmp
 
 # Change working directory to NVCaffe source path
 WORKDIR /opt/caffe
 
 # Apply modifications
 RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.patch
+RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.2.patch
 
 # Rebuild NVCaffe
 RUN mkdir build && cd build && \

@@ -7,9 +7,9 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void InterpLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, BType>::LayerSetUp(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
   InterpParameter interp_param = this->layer_param_.interp_param();
   pad_beg_ = interp_param.pad_beg();
   pad_end_ = interp_param.pad_end();
@@ -17,9 +17,9 @@ void InterpLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   CHECK_LE(pad_end_, 0) << "Only supports non-pos padding (cropping) for now";
 }
 
-template <typename Dtype>
-void InterpLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
   num_ = bottom[0]->num();
   channels_ = bottom[0]->channels();
   height_in_ = bottom[0]->height();
@@ -62,39 +62,39 @@ void InterpLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   top[0]->Reshape(num_, channels_, height_out_, width_out_);
 }
 
-template <typename Dtype>
-void InterpLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
-  caffe_cpu_interp2<Dtype,false>(num_ * channels_,
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
+  caffe_cpu_interp2<Ftype,false>(num_ * channels_,
     bottom[0]->cpu_data(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
     top[0]->mutable_cpu_data(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
-template <typename Dtype>
-void InterpLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
-      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
+      const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (!propagate_down[0]) { return; }
-  caffe_set(bottom[0]->count(), Dtype(0), bottom[0]->mutable_cpu_diff());
-  caffe_cpu_interp2_backward<Dtype,false>(num_ * channels_,
+  caffe_set(bottom[0]->count(), Btype(0), bottom[0]->mutable_cpu_diff());
+  caffe_cpu_interp2_backward<Btype,false>(num_ * channels_,
     bottom[0]->mutable_cpu_diff(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
     top[0]->cpu_diff(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
 #ifndef CPU_ONLY
-template <typename Dtype>
-void InterpLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
-  caffe_gpu_interp2<Dtype,false>(num_ * channels_,
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
+      const vector<Blob*>& top) {
+  caffe_gpu_interp2<Ftype,false>(num_ * channels_,
     bottom[0]->gpu_data(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
     top[0]->mutable_gpu_data(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
-template <typename Dtype>
-void InterpLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
-      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+template <typename Ftype, typename Btype>
+void InterpLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
+      const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (!propagate_down[0]) { return; }
-  caffe_gpu_set(bottom[0]->count(), Dtype(0), bottom[0]->mutable_gpu_diff());
-  caffe_gpu_interp2_backward<Dtype,false>(num_ * channels_,
+  caffe_gpu_set(bottom[0]->count(), Btype(0), bottom[0]->mutable_gpu_diff());
+  caffe_gpu_interp2_backward<Btype,false>(num_ * channels_,
     bottom[0]->mutable_gpu_diff(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
     top[0]->gpu_diff(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }

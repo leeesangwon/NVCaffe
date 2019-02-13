@@ -1,0 +1,13 @@
+diff --git a/include/caffe/layers/detection_output_layer.hpp b/include/caffe/layers/detection_output_layer.hpp
+index a8c7e41..c0ca632 100644
+--- a/include/caffe/layers/detection_output_layer.hpp
++++ b/include/caffe/layers/detection_output_layer.hpp
+@@ -46,7 +46,7 @@ class DetectionOutputLayer : public Layer<Ftype, Btype> {
+ 
+   virtual inline const char* type() const { return "DetectionOutput"; }
+   virtual inline int MinBottomBlobs() const { return 3; }
+-  virtual inline int MaxBottomBlobs() const { return 4; }
++  virtual inline int MaxBottomBlobs() const { return 5; }
+   virtual inline int ExactNumTopBlobs() const { return 1; }
+ 
+  protected:

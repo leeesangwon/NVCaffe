@@ -72,7 +72,7 @@ CuDNNBNLayer<Ftype, Btype>::~CuDNNBNLayer() {
   cudnnDestroy(handle_);
 }
 
-INSTANTIATE_CLASS(CuDNNBNLayer);
+INSTANTIATE_CLASS_FB(CuDNNBNLayer);
 
 }  // namespace caffe
 #endif

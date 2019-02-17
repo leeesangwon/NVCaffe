@@ -93,7 +93,7 @@ template <typename Ftype, typename Btype>
 void InterpLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (!propagate_down[0]) { return; }
-  bottom[0]->set_diff(0.)
+  bottom[0]->set_diff(0.);
   caffe_gpu_interp2_backward<Btype,false>(num_ * channels_,
     bottom[0]->mutable_gpu_diff<Btype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
     top[0]->gpu_diff<Btype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);

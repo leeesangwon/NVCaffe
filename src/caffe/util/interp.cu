@@ -3,6 +3,8 @@
 #include "caffe/common.hpp"
 #include "caffe/common.cuh"
 #include "caffe/util/interp.hpp"
+#include "caffe/util/gpu_util.cuh"
+#include "caffe/util/half.cuh"
 
 namespace caffe {
 

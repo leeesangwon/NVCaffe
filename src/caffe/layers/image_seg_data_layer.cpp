@@ -223,7 +223,7 @@ std::vector<cv::Mat> ImageSegDataLayer<Ftype, Btype>::next_mat_vector(
   // seg
   if (label_type == ImageDataParameter_LabelType_PIXEL) {
     cv_img_seg.push_back(ReadImageToCVMat(root_folder + file_names.second,
-            new_height, new_width, false, short_side));
+            height, width, false, short_side));
     if (!cv_img_seg[1].data) {
         DLOG(INFO) << "Fail to load seg: " << root_folder + file_names.second;
     }

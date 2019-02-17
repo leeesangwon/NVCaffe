@@ -8,7 +8,7 @@
 namespace caffe {
 
 template <typename Ftype, typename Btype>
-void InterpLayer<Ftype, BType>::LayerSetUp(const vector<Blob*>& bottom,
+void InterpLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
       const vector<Blob*>& top) {
   InterpParameter interp_param = this->layer_param_.interp_param();
   pad_beg_ = interp_param.pad_beg();
@@ -66,18 +66,18 @@ template <typename Ftype, typename Btype>
 void InterpLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
       const vector<Blob*>& top) {
   caffe_cpu_interp2<Ftype,false>(num_ * channels_,
-    bottom[0]->cpu_data(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
-    top[0]->mutable_cpu_data(), 0, 0, height_out_, width_out_, height_out_, width_out_);
+    bottom[0]->cpu_data<Ftype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
+    top[0]->mutable_cpu_data<Ftype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
 template <typename Ftype, typename Btype>
 void InterpLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (!propagate_down[0]) { return; }
-  caffe_set(bottom[0]->count(), Btype(0), bottom[0]->mutable_cpu_diff());
+  bottom[0]->set_diff(0.);
   caffe_cpu_interp2_backward<Btype,false>(num_ * channels_,
-    bottom[0]->mutable_cpu_diff(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
-    top[0]->cpu_diff(), 0, 0, height_out_, width_out_, height_out_, width_out_);
+    bottom[0]->mutable_cpu_diff<Btype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
+    top[0]->cpu_diff<Btype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
 #ifndef CPU_ONLY
@@ -85,18 +85,18 @@ template <typename Ftype, typename Btype>
 void InterpLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
       const vector<Blob*>& top) {
   caffe_gpu_interp2<Ftype,false>(num_ * channels_,
-    bottom[0]->gpu_data(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
-    top[0]->mutable_gpu_data(), 0, 0, height_out_, width_out_, height_out_, width_out_);
+    bottom[0]->gpu_data<Ftype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
+    top[0]->mutable_gpu_data<Ftype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 
 template <typename Ftype, typename Btype>
 void InterpLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
   if (!propagate_down[0]) { return; }
-  caffe_gpu_set(bottom[0]->count(), Btype(0), bottom[0]->mutable_gpu_diff());
+  bottom[0]->set_diff(0.)
   caffe_gpu_interp2_backward<Btype,false>(num_ * channels_,
-    bottom[0]->mutable_gpu_diff(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
-    top[0]->gpu_diff(), 0, 0, height_out_, width_out_, height_out_, width_out_);
+    bottom[0]->mutable_gpu_diff<Btype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
+    top[0]->gpu_diff<Btype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
 }
 #endif
 

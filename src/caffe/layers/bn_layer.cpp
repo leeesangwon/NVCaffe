@@ -66,21 +66,21 @@ void BNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
   while (this->layer_param_.param_size() < 4){
     this->layer_param_.mutable_param()->Add();
   }
-  this->layer_param_.mutable_param(2)->set_lr_mult(btype(0));
-  this->layer_param_.mutable_param(2)->set_decay_mult(btype(0));
+  this->layer_param_.mutable_param(2)->set_lr_mult(0.);
+  this->layer_param_.mutable_param(2)->set_decay_mult(0.);
 
-  this->layer_param_.mutable_param(3)->set_lr_mult(btype(0));
-  this->layer_param_.mutable_param(3)->set_decay_mult(btype(0));
+  this->layer_param_.mutable_param(3)->set_lr_mult(0.);
+  this->layer_param_.mutable_param(3)->set_decay_mult(0.);
 
   // shutdown scale and bias update in frozen mode
   if (this->frozen_){
     // slope
-    this->layer_param_.mutable_param(0)->set_lr_mult(btype(0));
-    this->layer_param_.mutable_param(0)->set_decay_mult(btype(0));
+    this->layer_param_.mutable_param(0)->set_lr_mult(0.);
+    this->layer_param_.mutable_param(0)->set_decay_mult(0.);
 
     // bias
-    this->layer_param_.mutable_param(1)->set_lr_mult(btype(0));
-    this->layer_param_.mutable_param(1)->set_decay_mult(btype(0));
+    this->layer_param_.mutable_param(1)->set_lr_mult(0.);
+    this->layer_param_.mutable_param(1)->set_decay_mult(0.);
   }
 
   // =====================================

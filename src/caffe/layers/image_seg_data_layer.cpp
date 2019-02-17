@@ -299,7 +299,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   transformed_data.Reshape(top_shape);
   batch->data_->Reshape(top_shape);
   vector<int> label_shape {batch_size, 1, crop_height, crop_width };
-  transformed_label.Reshape(top_shape);
+  transformed_label.Reshape(label_shape);
   batch->label_->Reshape(label_shape);
   vector<Btype> tmp(top_shape[1] * top_shape[2] * top_shape[3]);
   Btype* prefetch_data = batch->data_->mutable_cpu_data<Btype>();

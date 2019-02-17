@@ -79,7 +79,7 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
       "new_height and new_width to be set at the same time.";
 
   if (this->rank_ % Caffe::device_in_use_per_host_count() == 0) {
-    // Read the file with filenames and labels
+    // Read the file with file_names and labels
     lines_[id_].clear();
     const string &source = image_data_param.source();
     LOG(INFO) << "Opening file " << source;
@@ -90,11 +90,11 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
       std::istringstream iss(linestr);
       string img_file_name;
       iss >> img_file_name;
-      string segfn = "";
+      string seg_file_name = "";
       if (label_type != ImageDataParameter_LabelType_NONE) {
-        iss >> segfn;
+        iss >> seg_file_name;
       }
-      lines_[id_].emplace_back(std::make_pair(img_file_name, segfn));
+      lines_[id_].emplace_back(std::make_pair(img_file_name, seg_file_name));
     }
     if (image_data_param.shuffle()) {
       // randomly shuffle data
@@ -222,14 +222,14 @@ std::vector<cv::Mat> ImageSegDataLayer<Ftype, Btype>::next_mat_vector(
   }
   // seg
   if (label_type == ImageDataParameter_LabelType_PIXEL) {
-    cv_img_seg.push_back(ReadImageToCVMat(root_folder + filenames.second,
+    cv_img_seg.push_back(ReadImageToCVMat(root_folder + file_names.second,
             new_height, new_width, false, short_side));
     if (!cv_img_seg[1].data) {
-        DLOG(INFO) << "Fail to load seg: " << root_folder + filenames.second;
+        DLOG(INFO) << "Fail to load seg: " << root_folder + file_names.second;
     }
   }
   else if (label_type == ImageDataParameter_LabelType_IMAGE) {
-    const int label = atoi(filenames.second.c_str());
+    const int label = atoi(file_names.second.c_str());
     cv::Mat seg(cv_img_seg[0].rows, cv_img_seg[0].cols, 
                 CV_8UC1, cv::Scalar(label));
     cv_img_seg.push_back(seg);      
@@ -344,7 +344,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
         } else {
           DLOG(WARNING) << this->print_current_device()
                         << " Duplicate @ " << line_id << " " 
-                        << file_names[0] << " " << file_names[1];
+                        << file_names.first << " " << file_names.second;
         }
       } else {
         ++failed_num_[id_];
@@ -393,10 +393,10 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   }
   batch->set_data_packing(packing);
   batch->set_id(this->batch_id(thread_id));
-  return chached_[id_];
+  return cached_[id_];
 }
 
-INSTANTIATE_CLASS_FB(ImageSegDataLayer);
-REGISTER_LAYER_CLASS(ImageSegData);
+INSTANTIATE_CLASS_CPU_FB(ImageSegDataLayer);
+REGISTER_LAYER_CLASS_R(ImageSegData);
 
 }  // namespace caffe

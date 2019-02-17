@@ -673,7 +673,7 @@ void DataTransformer<Dtype>::TransformImgAndSeg(
 
   CHECK_GT(img_channels, 0);
 
-  Dtype* mean = NULL;
+  float* mean = NULL;
   if (has_mean_file) {
     CHECK_EQ(img_channels, data_mean_.channels());
     CHECK_EQ(img_height, data_mean_.height());

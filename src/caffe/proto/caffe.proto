@@ -711,7 +711,7 @@ message LayerParameter {
   optional DetectNetGroundTruthParameter detectnet_groundtruth_param = 6801;
   optional DetectNetAugmentationParameter detectnet_augmentation_param = 6802;
 
-  // PSPNet PARAMETERS
+  // For PSPNet
   optional InterpParameter interp_param = 3001;
   optional BNParameter bn_param = 3002;
   
@@ -830,6 +830,14 @@ message TransformationParameter {
   optional ExpansionParameter expand_param = 214;
   // Constraint for emitting the annotation after transformation.
   optional EmitConstraint emit_constraint = 210;  
+
+  // For PSPNet
+  // If we want to do data augmentation, Scaling factor for randomly scaling input images
+  repeated float scale_factors = 3001;
+  // the width for cropped region
+  optional uint32 crop_width = 3002 [default = 0];
+  // the height for cropped region
+  optional uint32 crop_height = 3003 [default = 0];
 }
 // Message that stores parameters used to create gridbox ground truth
 message DetectNetGroundTruthParameter {

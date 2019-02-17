@@ -39,6 +39,9 @@ class BNLayer : public Layer<Ftype, Btype> {
       const vector<bool>& propagate_down, const vector<Blob*>& bottom);
   virtual void Backward_gpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom);
+  virtual Type blobs_type() const {
+    return tp<Ftype>();
+  }
 
   void AverageAllExceptChannel(const Dtype* input, Dtype* output);
   void BroadcastChannel(const Dtype* input, Dtype* output);
@@ -52,15 +55,15 @@ class BNLayer : public Layer<Ftype, Btype> {
   int height_;
   int width_;
 
-  TBlob<Dtype> broadcast_buffer_;
-  TBlob<Dtype> spatial_statistic_;
-  TBlob<Dtype> batch_statistic_;
+  shared_ptr<Blob> broadcast_buffer_;
+  shared_ptr<Blob> spatial_statistic_;
+  shared_ptr<Blob> batch_statistic_;
 
-  TBlob<Dtype> x_norm_;
-  TBlob<Dtype> x_inv_std_;
+  shared_ptr<Blob> x_norm_;
+  shared_ptr<Blob> x_inv_std_;
 
-  TBlob<Dtype> spatial_sum_multiplier_;
-  TBlob<Dtype> batch_sum_multiplier_;
+  shared_ptr<Blob> spatial_sum_multiplier_;
+  shared_ptr<Blob> batch_sum_multiplier_;
 };
 
 }  // namespace caffe

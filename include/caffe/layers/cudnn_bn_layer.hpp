@@ -40,15 +40,19 @@ class CuDNNBNLayer : public BNLayer<Ftype, Btype> {
       const vector<Blob*>& top);
   virtual void Backward_gpu(const vector<Blob*>& top,
       const vector<bool>& propagate_down, const vector<Blob*>& bottom);
+  Type blobs_type() const override {
+    return tpmax<Ftype, float>();
+  }
 
   bool handles_setup_;
   cudnnHandle_t handle_;
-  cudnnTensorDescriptor_t bottom_desc_;
-  cudnnTensorDescriptor_t top_desc_;
-  cudnnTensorDescriptor_t bn_param_desc_;
+  cudnnTensorDescriptor_t fwd_bottom_desc_, bwd_bottom_desc_;
+  cudnnTensorDescriptor_t fwd_top_desc_, bwd_bottom_desc;
+  cudnnTensorDescriptor_t fwd_bn_param_desc_, bwd_bn_param_desc;
+  cudnnBatchNormMode_t mode_;
 
-  TBlob<Dtype> save_mean_;
-  TBlob<Dtype> save_inv_variance_;
+  shared_ptr<Blob> save_mean_;
+  shared_ptr<Blob> save_inv_variance_;
 };
 
 }  // namespace caffe

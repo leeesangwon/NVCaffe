@@ -51,6 +51,12 @@ DataTransformer<Dtype>::DataTransformer(const TransformationParameter& param, Ph
       mean_values_.emplace_back(param_.mean_value(c));
     }
   }
+  // check if we want to do random scaling
+  if (param_.scale_factors_size() > 0) {
+    for (int i = 0; i < param_.scale_factors_size(); ++i) {
+      scale_factors_.push_back(param_.scale_factors(i));
+    }
+  }
   InitRand();
 }
 
@@ -698,7 +704,7 @@ void DataTransformer<Dtype>::TransformImgAndSeg(
   // perform scaling
   if (scale_factors_.size() > 0) {
     int scale_ind = Rand(scale_factors_.size());
-    Dtype scale   = scale_factors_[scale_ind];
+    float scale   = scale_factors_[scale_ind];
 
     if (scale != 1) {
       img_height *= scale;

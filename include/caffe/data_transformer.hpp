@@ -288,6 +288,7 @@ class DataTransformer {
   Phase phase_;
   TBlob<float> data_mean_;
   vector<float> mean_values_;
+  vector<float> scale_factors_;
   cv::Mat mean_mat_orig_;
   mutable cv::Mat mean_mat_;
   mutable cv::Mat tmp_;

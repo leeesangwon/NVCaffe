@@ -104,7 +104,7 @@ void InterpLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
 STUB_GPU(InterpLayer);
 #endif
 
-INSTANTIATE_CLASS(InterpLayer);
+INSTANTIATE_CLASS_FB(InterpLayer);
 REGISTER_LAYER_CLASS(Interp);
 
 }  // namespace caffe

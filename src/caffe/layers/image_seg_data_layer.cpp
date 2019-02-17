@@ -376,7 +376,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   return chached_[id_];
 }
 
-INSTANTIATE_CLASS(ImageSegDataLayer);
+INSTANTIATE_CLASS_FB(ImageSegDataLayer);
 REGISTER_LAYER_CLASS(ImageSegData);
 
 }  // namespace caffe

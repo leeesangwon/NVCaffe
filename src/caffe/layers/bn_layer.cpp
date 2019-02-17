@@ -359,6 +359,6 @@ void BNLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
 STUB_GPU(BNLayer);
 #endif
 
-INSTANTIATE_CLASS(BNLayer);
+INSTANTIATE_CLASS_FB(BNLayer);
 REGISTER_LAYER_CLASS(BN);
 }  // namespace caffe

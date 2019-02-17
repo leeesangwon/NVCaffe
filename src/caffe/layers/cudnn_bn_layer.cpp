@@ -66,9 +66,9 @@ void CuDNNBNLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
     this->batch_statistic_->Reshape(1, this->channels_, 1, 1);
 
     this->spatial_sum_multiplier_->Reshape(1, 1, this->height_, this->width_);
-    this->spatial_sum_multiplier_->set_data(1.F)
+    this->spatial_sum_multiplier_->set_data(1.F);
     this->batch_sum_multiplier_->Reshape(this->num_, 1, 1, 1);
-    this->batch_sum_multiplier_->set_data(1.F)
+    this->batch_sum_multiplier_->set_data(1.F);
   }
 }
 

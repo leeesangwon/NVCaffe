@@ -191,7 +191,7 @@ cv::Mat ImageSegDataLayer<Ftype, Btype>::next_mat(const string& root_folder, con
       auto it = cache_[id_].find(file_name);
       if (it != cache_[id_].end()) {
         from_cache = true;
-        return it->second;
+        return it->second[0]; // it->second.first: img, .second: seg
       }
     }
   }
@@ -207,7 +207,7 @@ std::vector<cv::Mat> ImageSegDataLayer<Ftype, Btype>::next_mat_vector(
   if (this->layer_param_.image_data_param().cache()) {
     std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
     if (cache_[id_].size() > 0) {
-      auto it = cache_[id_].find(file_names);
+      auto it = cache_[id_].find(file_names.first);
       if (it != cache_[id_].end()) {
         from_cache = true;
         return it->second;
@@ -261,7 +261,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   const string& root_folder = image_data_param.root_folder();
   const int label_type = image_data_param.label_type();
   const int ignore_label = image_data_param.ignore_label();
-  unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>>& cache = cache_[id_];
+  unordered_map<std::string, std::vector<cv::Mat>>& cache = cache_[id_];
 
   size_t line_id = line_ids_[thread_id];
   const size_t line_bucket = Caffe::device_in_use_per_host_count() * this->threads_num();
@@ -299,7 +299,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   transformed_data.Reshape(top_shape);
   batch->data_->Reshape(top_shape);
   vector<int> label_shape {batch_size, 1, crop_height, crop_width };
-  transformed_label.Reshape();
+  transformed_label.Reshape(top_shape);
   batch->label_->Reshape(label_shape);
   vector<Btype> tmp(top_shape[1] * top_shape[2] * top_shape[3]);
   Btype* prefetch_data = batch->data_->mutable_cpu_data<Btype>();
@@ -311,7 +311,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   const size_t buf_len_label = batch->label_->offset(1);
   for (int item_id = 0; item_id < batch_size; ++item_id) {
     CHECK_GT(lines_size, line_id);
-    const string& file_names = lines_[id_][line_id];
+    const std::pair<string, string>& file_names = lines_[id_][line_id];
     from_cache = false;
     vector<cv::Mat> cv_img_seg;
     cv_img_seg = next_mat_vector(root_folder, file_names, new_height, new_width, is_color, short_side, 
@@ -338,7 +338,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
     if (cache_on && !cached_[id_] && !from_cache) {
       std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
       if (cv_img_seg[0].data != nullptr && cv_img_seg[1].data != nullptr) {
-        auto em = cache.emplace(file_names, cv_img_seg);
+        auto em = cache.emplace(file_names.first, cv_img_seg);
         if (em.second) {
           ++cached_num_[id_];
         } else {

@@ -44,7 +44,7 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
   void start_reading() override {}
   void InitializePrefetch() override;
 
-  bool auto_mode const override {
+  bool auto_mode() const override {
     return false;
   }
 
@@ -75,7 +75,7 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
 template <typename Ftype, typename Btype>
 vector<vector<std::pair<std::string, std::string>>> ImageSegDataLayer<Ftype, Btype>::lines_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>
-vector<unordered_map<std::string, cv::Mat>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
+vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>
 vector<bool> ImageSegDataLayer<Ftype, Btype>::cached_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>

@@ -40,7 +40,7 @@ static size_t idl_id(const string& ph, const string& name) {
 };
 
 template <typename Ftype, typename Btype>
-ImageSegDataLayer<Ftype, Btype>::ImageSegDataLayer(const LayerParameter& param, size_t sover_rank)
+ImageSegDataLayer<Ftype, Btype>::ImageSegDataLayer(const LayerParameter& param, size_t solver_rank)
     : BasePrefetchingDataLayer<Ftype, Btype>(param, solver_rank),
       id_(idl_id(Phase_Name(this->phase_), this->name())),
       epoch_count_(0UL) {
@@ -65,6 +65,7 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
   TBlob<Btype> transformed_label;
 
   const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
+  const TransformationParameter transform_param = this->layer_param_.transform_param();
   const int new_height = image_data_param.new_height();
   const int new_width  = image_data_param.new_width();
   const int short_side = image_data_param.short_side();
@@ -130,7 +131,7 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
   // Read an image, and use it to initialize the top blob.
   const string& imgfn = lines_[id_][line_ids_[0]].first;
   bool from_cache = false;
-  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width ,is_color, short_side,
+  cv::Mat cv_img = next_mat(root_folder, imgfn, new_height, new_width ,is_color, short_side,
       from_cache);
   CHECK(cv_img.data) << "Could not load " << root_folder + imgfn;
   // Reshape prefetch_data and top[0] according to the batch_size.
@@ -178,6 +179,24 @@ void ImageSegDataLayer<Ftype, Btype>::ShuffleImages() {
 
 template<typename Ftype, typename Btype>
 void ImageSegDataLayer<Ftype, Btype>::InitializePrefetch() {}
+
+template<typename Ftype, typename Btype>
+cv::Mat ImageDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const string& file_name,
+                                               int height, int width,
+                                               bool is_color, int short_side, bool& from_cache) {
+  from_cache = false;
+  if (this->layer_param_.image_data_param().cache()) {
+    std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
+    if (cache_[id_].size() > 0) {
+      auto it = cache_[id_].find(file_name);
+      if (it != cache_[id_].end()) {
+        from_cache = true;
+        return it->second;
+      }
+    }
+  }
+  return ReadImageToCVMat(root_folder + file_name, height, width, is_color, short_side);
+}
 
 template<typename Ftype, typename Btype>
 std::vector<cv::Mat> ImageSegDataLayer<Ftype, Btype>::next_mat_vector(
@@ -230,6 +249,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
 
   CHECK(batch->data_->count());
   const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
+  const TransformationParameter transform_param = this->layer_param_.transform_param();
   const int batch_size = image_data_param.batch_size();
   const int new_height = image_data_param.new_height();
   const int new_width = image_data_param.new_width();
@@ -279,7 +299,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   transformed_data.Reshape(top_shape);
   batch->data_->Reshape(top_shape);
   vector<int> label_shape {batch_size, 1, crop_height, crop_width };
-  transformed_label.Reshape()
+  transformed_label.Reshape();
   batch->label_->Reshape(label_shape);
   vector<Btype> tmp(top_shape[1] * top_shape[2] * top_shape[3]);
   Btype* prefetch_data = batch->data_->mutable_cpu_data<Btype>();
@@ -291,7 +311,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   const size_t buf_len_label = batch->label_->offset(1);
   for (int item_id = 0; item_id < batch_size; ++item_id) {
     CHECK_GT(lines_size, line_id);
-    const string& file_names = lines_[id_][line_id]
+    const string& file_names = lines_[id_][line_id];
     from_cache = false;
     vector<cv::Mat> cv_img_seg;
     cv_img_seg = next_mat_vector(root_folder, file_names, new_height, new_width, is_color, short_side, 
@@ -299,10 +319,10 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
     if (cv_img_seg[0].data) {
       int offset;
       offset = batch->data_->offset(item_id);
-      transformed_data.set_cpu_data(prefetch_data + offset)
+      transformed_data.set_cpu_data(prefetch_data + offset);
 
       offset = batch->label_.offset(item_id);
-      transformed_label.set_cpu_data(prefetch_label + offset)
+      transformed_label.set_cpu_data(prefetch_label + offset);
 
 #if defined(USE_CUDNN)
       this->bdt(thread_id)->TransformImgAndSeg(cv_img_seg, 

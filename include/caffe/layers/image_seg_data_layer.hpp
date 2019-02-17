@@ -54,7 +54,7 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
 
   cv::Mat next_mat(const string& root_folder, const string& filename, int height, int width,
                    bool is_color, int short_side, bool& from_cache);
-  std::pair<cv::Mat, cv::Mat> next_mat_vector(
+  std::vector<cv::Mat> next_mat_vector(
       const string& root_folder, 
       const std::pair<std::string, std::string> filename, 
       int height, int width, bool is_color, int short_side, 

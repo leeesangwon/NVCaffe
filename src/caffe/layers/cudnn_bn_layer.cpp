@@ -17,7 +17,6 @@ void CuDNNBNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
   save_inv_variance_->ReshapeLike(*(this->blobs_[3]));
 
   // Initialize CUDNN.
-  CUDNN_CHECK(cudnnCreate(&handle_));
   cudnn::createTensor4dDesc<Ftype>(&fwd_bottom_desc_);
   cudnn::createTensor4dDesc<Ftype>(&fwd_top_desc_);
   cudnn::createTensor4dDesc<Ftype>(&fwd_bn_param_desc_);
@@ -84,7 +83,6 @@ CuDNNBNLayer<Ftype, Btype>::~CuDNNBNLayer() {
   cudnnDestroyTensorDescriptor(bwd_top_desc_);
   cudnnDestroyTensorDescriptor(fwd_bn_param_desc_);
   cudnnDestroyTensorDescriptor(bwd_bn_param_desc_);
-  cudnnDestroy(handle_);
 }
 
 INSTANTIATE_CLASS_FB(CuDNNBNLayer);

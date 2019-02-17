@@ -45,7 +45,6 @@ class CuDNNBNLayer : public BNLayer<Ftype, Btype> {
   }
 
   bool handles_setup_;
-  cudnnHandle_t handle_;
   cudnnTensorDescriptor_t fwd_bottom_desc_, bwd_bottom_desc_;
   cudnnTensorDescriptor_t fwd_top_desc_, bwd_bottom_desc;
   cudnnTensorDescriptor_t fwd_bn_param_desc_, bwd_bn_param_desc;

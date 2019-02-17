@@ -22,13 +22,13 @@ void CuDNNBNLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
   if (this->phase_ == TEST || this->frozen_) {
     const Ftype* running_mean_data = this->blobs_[2]->template gpu_data<Ftype>();
     const Ftype* running_variance_data = this->blobs_[3]->template gpu_data<Ftype>();
-    CUDNN_CHECK(cudnnBatchNormalizationForwardInference(handle_,
+    CUDNN_CHECK(cudnnBatchNormalizationForwardInference(Caffe::cudnn_handle(0),
         CUDNN_BATCHNORM_SPATIAL,
         cudnn::dataType<Ftype>::one,
         cudnn::dataType<Ftype>::zero,
-        bottom_desc_, bottom_data,
-        top_desc_, top_data,
-        bn_param_desc_, scale_data, bias_data,
+        fwd_bottom_desc_, bottom_data,
+        fwd_top_desc_, top_data,
+        fwd_bn_param_desc_, scale_data, bias_data,
         running_mean_data, running_variance_data,
         epsilon));
   } else {
@@ -36,13 +36,13 @@ void CuDNNBNLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
     Ftype* running_variance_data = this->blobs_[3]->template mutable_gpu_data<Ftype>();
     Ftype* save_mean_data = save_mean_->template mutable_gpu_data<Ftype>();
     Ftype* save_inv_variance_data = save_inv_variance_->template mutable_gpu_data<Ftype>();
-    CUDNN_CHECK(cudnnBatchNormalizationForwardTraining(handle_,
-        CUDNN_BATCHNORM_SPATIAL,
+    CUDNN_CHECK(cudnnBatchNormalizationForwardTraining(Caffe::cudnn_handle(0),
+        mode_,
         cudnn::dataType<Ftype>::one,
         cudnn::dataType<Ftype>::zero,
-        bottom_desc_, bottom_data,
-        top_desc_, top_data,
-        bn_param_desc_, scale_data, bias_data,
+        fwd_bottom_desc_, bottom_data,
+        fwd_top_desc_, top_data,
+        fwd_bn_param_desc_, scale_data, bias_data,
         1 - this->bn_momentum_,
         running_mean_data, running_variance_data,
         epsilon,
@@ -70,16 +70,16 @@ void CuDNNBNLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
 
     const double epsilon = max(this->bn_eps_, CUDNN_BN_MIN_EPSILON);
 
-    CUDNN_CHECK(cudnnBatchNormalizationBackward(handle_,
-        CUDNN_BATCHNORM_SPATIAL,
+    CUDNN_CHECK(cudnnBatchNormalizationBackward(Caffe::cudnn_handle(0),
+        mode_,
         cudnn::dataType<Btype>::one,
         cudnn::dataType<Btype>::zero,
         cudnn::dataType<Btype>::one,
         cudnn::dataType<Btype>::one,
-        bottom_desc_, bottom_data,
-        top_desc_, top_diff,
-        bottom_desc_, bottom_diff,
-        bn_param_desc_, scale_data,
+        bwd_bottom_desc_, bottom_data,
+        bwd_top_desc_, top_diff,
+        bwd_bottom_desc_, bottom_diff,
+        bwd_bn_param_desc_, scale_data,
         scale_diff, bias_diff,
         epsilon,
         save_mean_data, save_inv_variance_data));

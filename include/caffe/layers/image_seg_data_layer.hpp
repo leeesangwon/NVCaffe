@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 #include "caffe/blob.hpp"
 #include "caffe/data_transformer.hpp"
@@ -12,6 +13,18 @@
 #include "caffe/layers/base_data_layer.hpp"
 #include "caffe/proto/caffe.pb.h"
 
+
+struct pair_hash {
+    template <class T1, class T2>
+    std::size_t operator () (const std::pair<T1,T2> &p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+
+        // Mainly for demonstration purposes, i.e. works but is overly simple
+        // In the real world, use sth. like boost.hash_combine
+        return h1 ^ h2;  
+    }
+};
 
 namespace caffe {
 
@@ -52,9 +65,13 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
     return this->phase_ == TRAIN ? &layer_inititialized_flag_ : nullptr;
   }
 
-  std::vector<cv::Mat> next_mat_vector(const string& root_folder, const string& filename, 
-                                       int height, int width, bool is_color, int short_side, 
-                                       bool& from_cache, const int label_type, const int ignore_label);
+  cv::Mat next_mat(const string& root_folder, const string& filename, int height, int width,
+                   bool is_color, int short_side, bool& from_cache);
+  std::vector<cv::Mat> next_mat_vector(
+      const string& root_folder, 
+      const std::pair<std::string, std::string> filename, 
+      int height, int width, bool is_color, int short_side, 
+      bool& from_cache, const int label_type, const int ignore_label);
 
   const size_t id_;  // per layer per phase
   shared_ptr<Caffe::RNG> prefetch_rng_;
@@ -63,7 +80,7 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
   vector<size_t> line_ids_;
 
   static vector<vector<std::pair<std::string, std::string>>> lines_;  // per id_
-  static vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>>> cache_;
+  static vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>, pair_hash>> cache_;
   static vector<std::mutex> cache_mutex_;
   static vector<bool> cached_;
   static vector<size_t> cached_num_, failed_num_;
@@ -75,7 +92,7 @@ class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
 template <typename Ftype, typename Btype>
 vector<vector<std::pair<std::string, std::string>>> ImageSegDataLayer<Ftype, Btype>::lines_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>
-vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
+vector<unordered_map<std::pair<std::string, std::string>, std::pair<cv::Mat, cv::Mat>, pair_hash>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>
 vector<bool> ImageSegDataLayer<Ftype, Btype>::cached_(MAX_IDL_CACHEABLE);
 template <typename Ftype, typename Btype>

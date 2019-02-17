@@ -88,13 +88,13 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
     string linestr;
     while (std::getline(infile, linestr)) {
       std::istringstream iss(linestr);
-      string imgfn;
-      iss >> imgfn;
+      string img_file_name;
+      iss >> img_file_name;
       string segfn = "";
       if (label_type != ImageDataParameter_LabelType_NONE) {
         iss >> segfn;
       }
-      lines_[id_].emplace_back(std::make_pair(imgfn, segfn));
+      lines_[id_].emplace_back(std::make_pair(img_file_name, segfn));
     }
     if (image_data_param.shuffle()) {
       // randomly shuffle data
@@ -129,11 +129,11 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
   }
 
   // Read an image, and use it to initialize the top blob.
-  const string& imgfn = lines_[id_][line_ids_[0]].first;
+  const string& img_file_name = lines_[id_][line_ids_[0]].first;
   bool from_cache = false;
-  cv::Mat cv_img = next_mat(root_folder, imgfn, new_height, new_width ,is_color, short_side,
+  cv::Mat cv_img = next_mat(root_folder, img_file_name, new_height, new_width ,is_color, short_side,
       from_cache);
-  CHECK(cv_img.data) << "Could not load " << root_folder + imgfn;
+  CHECK(cv_img.data) << "Could not load " << root_folder + img_file_name;
   // Reshape prefetch_data and top[0] according to the batch_size.
   const int batch_size = image_data_param.batch_size();
   CHECK_GT(batch_size, 0) << "Positive batch size required";
@@ -151,12 +151,12 @@ void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom
     crop_width = transform_param.crop_width();
   }
   if (crop_width <= 0 || crop_height <= 0) {
-    LOG_FIRST_N(INFO, 1) << "Crop is not set. Using '" << root_folder + file_name
+    LOG_FIRST_N(INFO, 1) << "Crop is not set. Using '" << root_folder + img_file_name
                          << "' as a model, w=" << cv_img.rows << ", h=" << cv_img.cols;
     crop_height = cv_img.rows;
     crop_width = cv_img.cols;
   }
-  vector<int> top_shape { batch_size, cv_image.channels(), crop_height, crop_width };
+  vector<int> top_shape { batch_size, cv_img.channels(), crop_height, crop_width };
   transformed_data.Reshape(top_shape);
   top[0]->Reshape(top_shape);
   LOG_IF(INFO, P2PManager::global_rank() == 0) << "output data size: " << top[0]->num() << ", "
@@ -181,7 +181,7 @@ template<typename Ftype, typename Btype>
 void ImageSegDataLayer<Ftype, Btype>::InitializePrefetch() {}
 
 template<typename Ftype, typename Btype>
-cv::Mat ImageDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const string& file_name,
+cv::Mat ImageSegDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const string& file_name,
                                                int height, int width,
                                                bool is_color, int short_side, bool& from_cache) {
   from_cache = false;
@@ -321,7 +321,7 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
       offset = batch->data_->offset(item_id);
       transformed_data.set_cpu_data(prefetch_data + offset);
 
-      offset = batch->label_.offset(item_id);
+      offset = batch->label_->offset(item_id);
       transformed_label.set_cpu_data(prefetch_label + offset);
 
 #if defined(USE_CUDNN)

@@ -252,14 +252,19 @@ void caffe_gpu_pyramid2(const int channels,
 
 
 // Explicit instances
+template void caffe_gpu_interp2<half_float::half,false>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
+template void caffe_gpu_interp2<half_float::half,true>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2<float,false>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2<float,true>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2<double,false>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2<double,true>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
 
+template void caffe_gpu_interp2_backward<half_float::half,false>(const int, half_float::half *, const int, const int, const int, const int, const int, const int, const half_float::half *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2_backward<float,false>(const int, float *, const int, const int, const int, const int, const int, const int, const float *, const int, const int, const int, const int, const int, const int);
 template void caffe_gpu_interp2_backward<double,false>(const int, double *, const int, const int, const int, const int, const int, const int, const double *, const int, const int, const int, const int, const int, const int);
 
+template void caffe_gpu_pyramid2<half_float::half,false>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
+template void caffe_gpu_pyramid2<half_float::half,true>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
 template void caffe_gpu_pyramid2<float,false>(const int, const float *, const int, const int, float *, const int);
 template void caffe_gpu_pyramid2<float,true>(const int, const float *, const int, const int, float *, const int);
 template void caffe_gpu_pyramid2<double,false>(const int, const double *, const int, const int, double *, const int);

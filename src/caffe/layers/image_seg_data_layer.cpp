@@ -307,8 +307,6 @@ bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, si
   Packing packing = NHWC;
 
   // datum scales
-  const size_t buf_len = batch->data_->offset(1);
-  const size_t buf_len_label = batch->label_->offset(1);
   for (int item_id = 0; item_id < batch_size; ++item_id) {
     CHECK_GT(lines_size, line_id);
     const std::pair<string, string>& file_names = lines_[id_][line_id];

@@ -46,8 +46,8 @@ class CuDNNBNLayer : public BNLayer<Ftype, Btype> {
 
   bool handles_setup_;
   cudnnTensorDescriptor_t fwd_bottom_desc_, bwd_bottom_desc_;
-  cudnnTensorDescriptor_t fwd_top_desc_, bwd_bottom_desc;
-  cudnnTensorDescriptor_t fwd_bn_param_desc_, bwd_bn_param_desc;
+  cudnnTensorDescriptor_t fwd_top_desc_, bwd_top_desc_;
+  cudnnTensorDescriptor_t fwd_bn_param_desc_, bwd_bn_param_desc_;
   cudnnBatchNormMode_t mode_;
 
   shared_ptr<Blob> save_mean_;

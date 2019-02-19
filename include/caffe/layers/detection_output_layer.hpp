@@ -79,6 +79,7 @@ class DetectionOutputLayer : public Layer<Ftype, Btype> {
     NOT_IMPLEMENTED;
   }
 
+  float objectness_score_;
   int num_classes_;
   bool share_location_;
   int num_loc_classes_;

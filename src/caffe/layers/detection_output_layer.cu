@@ -19,15 +19,25 @@ void DetectionOutputLayer<Ftype, Btype>::Forward_gpu(
     const vector<Blob*>& bottom, const vector<Blob*>& top) {
   const Ftype* loc_data = bottom[0]->gpu_data<Ftype>();
   const Ftype* prior_data = bottom[2]->gpu_data<Ftype>();
+  const Ftype* arm_loc_data = NULL;
   const int num = bottom[0]->num();
+  if (bottom.size() >= 5){
+    arm_loc_data = bottom[4]->gpu_data<Ftype>();
+  }
 
   // Decode predictions.
   Ftype* bbox_data = bbox_preds_.mutable_gpu_data();
   const int loc_count = bbox_preds_.count();
   const bool clip_bbox = false;
-  DecodeBBoxesGPU<Ftype>(loc_count, loc_data, prior_data, code_type_,
-      variance_encoded_in_target_, num_priors_, share_location_,
-      num_loc_classes_, background_label_id_, clip_bbox, bbox_data);
+  if (bottom.size() >= 5) {
+    CasRegDecodeBBoxesGPU<Ftype>(loc_count, loc_data, prior_data, code_type_,
+        variance_encoded_in_target_, num_priors_, share_location_,
+        num_loc_classes_, background_label_id_, clip_bbox, bbox_data, arm_loc_data);
+  } else {
+    DecodeBBoxesGPU<Ftype>(loc_count, loc_data, prior_data, code_type_,
+        variance_encoded_in_target_, num_priors_, share_location_,
+        num_loc_classes_, background_label_id_, clip_bbox, bbox_data);
+  }
   // Retrieve all decoded location predictions.
   const Ftype* bbox_cpu_data;
   if (!share_location_) {
@@ -41,8 +51,13 @@ void DetectionOutputLayer<Ftype, Btype>::Forward_gpu(
 
   // Retrieve all confidences.
   Ftype* conf_permute_data = conf_permute_.mutable_gpu_data();
-  PermuteDataGPU<Ftype>(bottom[1]->count(), bottom[1]->gpu_data<Ftype>(),
-      num_classes_, num_priors_, 1, conf_permute_data);
+  if (bottom.size() >= 4) {
+    OSPermuteDataGPU<Ftype>(bottom[1]->count(), bottom[1]->gpu_data<Ftype>(), bottom[3]->gpu_data<Ftype>(),
+        num_classes_, num_priors_, 1, conf_permute_data, objectness_score_);
+  } else {
+    PermuteDataGPU<Ftype>(bottom[1]->count(), bottom[1]->gpu_data<Ftype>(),
+        num_classes_, num_priors_, 1, conf_permute_data);
+  }
   const Ftype* conf_cpu_data = conf_permute_.cpu_data();
 
   int num_kept = 0;

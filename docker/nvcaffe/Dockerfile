@@ -4,6 +4,7 @@ FROM nvcr.io/nvidia/caffe:19.01-py2
 # (assume caffe-refinedet-modifications.patch is in same directory as Dockerfile)
 COPY nvcaffe-refinedet-modifications.patch /tmp
 COPY nvcaffe-refinedet-modifications.2.patch /tmp
+COPY nvcaffe-pspnet-modifications.patch /tmp
 
 # Change working directory to NVCaffe source path
 WORKDIR /opt/caffe
@@ -11,6 +12,7 @@ WORKDIR /opt/caffe
 # Apply modifications
 RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.patch
 RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.2.patch
+RUN patch -p1 < /tmp/nvcaffe-pspnet-modifications.patch
 
 # Rebuild NVCaffe
 RUN mkdir build && cd build && \
@@ -24,3 +26,5 @@ RUN mkdir build && cd build && \
 
 # Reset default working directory
 WORKDIR /workspace
+
+RUN pip install tqdm

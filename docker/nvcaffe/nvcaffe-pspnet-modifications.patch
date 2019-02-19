@@ -1,0 +1,2717 @@
+diff --git a/include/caffe/common.cuh b/include/caffe/common.cuh
+new file mode 100644
+index 0000000..7c31cdd
+--- /dev/null
++++ b/include/caffe/common.cuh
+@@ -0,0 +1,25 @@
++// Copyright 2014 George Papandreou
++
++#ifndef CAFFE_COMMON_CUH_
++#define CAFFE_COMMON_CUH_
++
++#include <cuda.h>
++
++#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
++
++	#else
++	// CUDA: atomicAdd is not defined for doubles
++	static __inline__ __device__ double atomicAdd(double *address, double val) {
++	  unsigned long long int* address_as_ull = (unsigned long long int*)address;
++	  unsigned long long int old = *address_as_ull, assumed;
++	  if (val==0.0)
++	    return __longlong_as_double(old);
++	  do {
++	    assumed = old;
++	    old = atomicCAS(address_as_ull, assumed, __double_as_longlong(val +__longlong_as_double(assumed)));
++	  } while (assumed != old);
++	  return __longlong_as_double(old);
++	}
++
++	#endif
++#endif
+diff --git a/include/caffe/data_transformer.hpp b/include/caffe/data_transformer.hpp
+index 853a1f2..8294a93 100644
+--- a/include/caffe/data_transformer.hpp
++++ b/include/caffe/data_transformer.hpp
+@@ -55,6 +55,10 @@ class DataTransformer {
+   vector<int> Transform(const Datum* datum, Dtype* buf, size_t buf_len,
+       Packing& out_packing, bool repack = true);
+ 
++  void TransformImgAndSeg(const std::vector<cv::Mat>& cv_img_seg,
++    TBlob<Dtype>* transformed_data_blob, TBlob<Dtype>* transformed_label_blob,
++    const int ignore_label);
++
+   /**
+    * @brief Applies transformations defined in the image data layer's
+    * transform_param block to the data.
+@@ -284,6 +288,7 @@ class DataTransformer {
+   Phase phase_;
+   TBlob<float> data_mean_;
+   vector<float> mean_values_;
++  vector<float> scale_factors_;
+   cv::Mat mean_mat_orig_;
+   mutable cv::Mat mean_mat_;
+   mutable cv::Mat tmp_;
+diff --git a/include/caffe/layers/bn_layer.hpp b/include/caffe/layers/bn_layer.hpp
+new file mode 100644
+index 0000000..dab7c5e
+--- /dev/null
++++ b/include/caffe/layers/bn_layer.hpp
+@@ -0,0 +1,71 @@
++#ifndef CAFFE_BN_LAYER_HPP_
++#define CAFFE_BN_LAYER_HPP_
++
++#include <vector>
++
++#include "caffe/blob.hpp"
++#include "caffe/layer.hpp"
++#include "caffe/proto/caffe.pb.h"
++
++namespace caffe {
++/**
++ * @brief Batch normalization the input blob along the channel axis while
++ *        averaging over the spatial axes.
++ *
++ * TODO(dox): thorough documentation for Forward, Backward, and proto params.
++ */
++template <typename Ftype, typename Btype>
++class BNLayer : public Layer<Ftype, Btype> {
++  typedef Ftype Dtype;
++
++ public:
++  explicit BNLayer(const LayerParameter& param)
++      : Layer<Ftype, Btype>(param) {}
++  virtual void LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++
++  virtual inline const char* type() const { return "BN"; }
++  virtual inline int ExactNumBottomBlobs() const { return 1; }
++  virtual inline int ExactNumTopBlobs() const { return 1; }
++
++ protected:
++  virtual void Forward_cpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Forward_gpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Backward_cpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom);
++  virtual void Backward_gpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom);
++  virtual Type blobs_type() const {
++    return tp<Ftype>();
++  }
++
++  void AverageAllExceptChannel(const Dtype* input, Dtype* output);
++  void BroadcastChannel(const Dtype* input, Dtype* output);
++
++  bool frozen_;
++  Dtype bn_momentum_;
++  Dtype bn_eps_;
++
++  int num_;
++  int channels_;
++  int height_;
++  int width_;
++
++  shared_ptr<Blob> broadcast_buffer_;
++  shared_ptr<Blob> spatial_statistic_;
++  shared_ptr<Blob> batch_statistic_;
++
++  shared_ptr<Blob> x_norm_;
++  shared_ptr<Blob> x_inv_std_;
++
++  shared_ptr<Blob> spatial_sum_multiplier_;
++  shared_ptr<Blob> batch_sum_multiplier_;
++};
++
++}  // namespace caffe
++
++#endif  // CAFFE_BN_LAYER_HPP_
+diff --git a/include/caffe/layers/cudnn_bn_layer.hpp b/include/caffe/layers/cudnn_bn_layer.hpp
+new file mode 100644
+index 0000000..83e7ab9
+--- /dev/null
++++ b/include/caffe/layers/cudnn_bn_layer.hpp
+@@ -0,0 +1,61 @@
++#ifdef USE_CUDNN
++#ifndef CAFFE_CUDNN_BN_LAYER_HPP_
++#define CAFFE_CUDNN_BN_LAYER_HPP_
++
++#include <vector>
++
++#include "caffe/blob.hpp"
++#include "caffe/layer.hpp"
++#include "caffe/proto/caffe.pb.h"
++
++#include "caffe/layers/bn_layer.hpp"
++
++#if CUDNN_VERSION_MIN(5, 0, 0)
++
++namespace caffe {
++
++/**
++ * @brief cuDNN implementation of BNLayer.
++ *        Fallback to BNLayer for CPU mode.
++ */
++template <typename Ftype, typename Btype>
++class CuDNNBNLayer : public BNLayer<Ftype, Btype> {
++  typedef Ftype Dtype;
++  
++ public:
++  explicit CuDNNBNLayer(const LayerParameter& param)
++      : BNLayer<Ftype, Btype>(param), handles_setup_(false) {}
++  virtual void LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual ~CuDNNBNLayer();
++
++  virtual inline const char* type() const { return "BN"; }
++  virtual inline int ExactNumBottomBlobs() const { return 1; }
++  virtual inline int ExactNumTopBlobs() const { return 1; }
++
++ protected:
++  virtual void Forward_gpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Backward_gpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom);
++  Type blobs_type() const override {
++    return tpmax<Ftype, float>();
++  }
++
++  bool handles_setup_;
++  cudnnTensorDescriptor_t fwd_bottom_desc_, bwd_bottom_desc_;
++  cudnnTensorDescriptor_t fwd_top_desc_, bwd_top_desc_;
++  cudnnTensorDescriptor_t fwd_bn_param_desc_, bwd_bn_param_desc_;
++  cudnnBatchNormMode_t mode_;
++
++  shared_ptr<Blob> save_mean_;
++  shared_ptr<Blob> save_inv_variance_;
++};
++
++}  // namespace caffe
++
++#endif  // CAFFE_CUDNN_BN_LAYER_HPP_
++#endif
++#endif
+diff --git a/include/caffe/layers/image_seg_data_layer.hpp b/include/caffe/layers/image_seg_data_layer.hpp
+new file mode 100644
+index 0000000..a88c5ad
+--- /dev/null
++++ b/include/caffe/layers/image_seg_data_layer.hpp
+@@ -0,0 +1,96 @@
++#ifndef CAFFE_IMAGE_SEG_DATA_LAYER_HPP_
++#define CAFFE_IMAGE_SEG_DATA_LAYER_HPP_
++
++#include <string>
++#include <utility>
++#include <vector>
++#include <unordered_map>
++
++#include "caffe/blob.hpp"
++#include "caffe/data_transformer.hpp"
++#include "caffe/internal_thread.hpp"
++#include "caffe/layer.hpp"
++#include "caffe/layers/base_data_layer.hpp"
++#include "caffe/proto/caffe.pb.h"
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++class ImageSegDataLayer : public BasePrefetchingDataLayer<Ftype, Btype> {
++ public:
++  ImageSegDataLayer(const LayerParameter& param, size_t solver_rank);
++  virtual ~ImageSegDataLayer();
++  void DataLayerSetUp(const vector<Blob*>& bottom, const vector<Blob*>& top) override;
++
++  bool ShareInParallel() const override {
++    return false;
++  }
++  const char* type() const override {
++    return "ImageSegData";
++  }
++  int ExactNumBottomBlobs() const override {
++    return 0;
++  }
++  int ExactNumTopBlobs() const override {
++    return 3;
++  }
++  bool AutoTopBlobs() const override {
++    return true;
++  }
++
++ protected:
++  void ShuffleImages();
++  bool load_batch(Batch* batch, int thread_id, size_t queue_id = 0UL) override;
++  void start_reading() override {}
++  void InitializePrefetch() override;
++
++  bool auto_mode() const override {
++    return false;
++  }
++
++  Flag* layer_inititialized_flag() override {
++    return this->phase_ == TRAIN ? &layer_inititialized_flag_ : nullptr;
++  }
++
++  cv::Mat next_mat(const string& root_folder, const string& filename, int height, int width,
++                   bool is_color, int short_side, bool& from_cache);
++  std::vector<cv::Mat> next_mat_vector(
++      const string& root_folder, 
++      const std::pair<std::string, std::string> filename, 
++      int height, int width, bool is_color, int short_side, 
++      bool& from_cache, const int label_type, const int ignore_label);
++
++  const size_t id_;  // per layer per phase
++  shared_ptr<Caffe::RNG> prefetch_rng_;
++  Flag layer_inititialized_flag_;
++  size_t epoch_count_;
++  vector<size_t> line_ids_;
++
++  static vector<vector<std::pair<std::string, std::string>>> lines_;  // per id_
++  static vector<unordered_map<std::string, std::vector<cv::Mat>>> cache_;
++  static vector<std::mutex> cache_mutex_;
++  static vector<bool> cached_;
++  static vector<size_t> cached_num_, failed_num_;
++  static vector<float> cache_progress_;
++};
++
++#define MAX_IDL_CACHEABLE (2UL * Phase_ARRAYSIZE)
++
++template <typename Ftype, typename Btype>
++vector<vector<std::pair<std::string, std::string>>> ImageSegDataLayer<Ftype, Btype>::lines_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<unordered_map<std::string, std::vector<cv::Mat>>> ImageSegDataLayer<Ftype, Btype>::cache_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<bool> ImageSegDataLayer<Ftype, Btype>::cached_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<size_t> ImageSegDataLayer<Ftype, Btype>::cached_num_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<size_t> ImageSegDataLayer<Ftype, Btype>::failed_num_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<std::mutex> ImageSegDataLayer<Ftype, Btype>::cache_mutex_(MAX_IDL_CACHEABLE);
++template <typename Ftype, typename Btype>
++vector<float> ImageSegDataLayer<Ftype, Btype>::cache_progress_(MAX_IDL_CACHEABLE);
++
++}  // namespace caffe
++
++#endif  // CAFFE_IMAGE_SEG_DATA_LAYER_HPP_
+diff --git a/include/caffe/layers/interp_layer.hpp b/include/caffe/layers/interp_layer.hpp
+new file mode 100644
+index 0000000..b1423a5
+--- /dev/null
++++ b/include/caffe/layers/interp_layer.hpp
+@@ -0,0 +1,50 @@
++#ifndef CAFFE_INTERP_LAYER_HPP_
++#define CAFFE_INTERP_LAYER_HPP_
++
++#include <vector>
++
++#include "caffe/blob.hpp"
++#include "caffe/layer.hpp"
++#include "caffe/proto/caffe.pb.h"
++
++namespace caffe {
++/**
++ * @brief Changes the spatial resolution by bi-linear interpolation.
++ *        The target size is specified in terms of pixels. 
++ *        The start and end pixels of the input are mapped to the start
++ *        and end pixels of the output.
++ */
++template <typename Ftype, typename Btype>
++class InterpLayer : public Layer<Ftype, Btype> {
++ public:
++  explicit InterpLayer(const LayerParameter& param)
++      : Layer<Ftype, Btype>(param) {}
++  virtual void LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++
++  virtual inline const char* type() const { return "Interp"; }
++  virtual inline int ExactNumBottomBlobs() const { return 1; }
++  virtual inline int ExactNumTopBlobs() const { return 1; }
++
++ protected:
++  virtual void Forward_cpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Forward_gpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top);
++  virtual void Backward_cpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom);
++  virtual void Backward_gpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom);
++  
++  int num_, channels_;
++  int height_in_, width_in_;
++  int height_out_, width_out_;
++  int pad_beg_, pad_end_;
++  int height_in_eff_, width_in_eff_;
++};
++
++}  // namespace caffe
++
++#endif  // CAFFE_CONV_LAYER_HPP_
+diff --git a/include/caffe/util/interp.hpp b/include/caffe/util/interp.hpp
+new file mode 100644
+index 0000000..1fd0b4e
+--- /dev/null
++++ b/include/caffe/util/interp.hpp
+@@ -0,0 +1,64 @@
++// Copyright 2014 George Papandreou
++
++#ifndef CAFFE_UTIL_INTERP_H_
++#define CAFFE_UTIL_INTERP_H_
++
++#include <cublas_v2.h>
++#include "caffe/proto/caffe.pb.h"
++
++namespace caffe {
++
++// Bi-linear interpolation
++// IN : [channels height1 width1] cropped from a bigger [Height1 Width1] image
++// OUT: [channels height2 width2] cropped from a bigger [Height2 Width2] image
++
++template <typename Dtype, bool packed>
++void caffe_cpu_interp2(const int channels,
++    const Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++          Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2);
++
++template <typename Dtype, bool packed>
++void caffe_gpu_interp2(const int channels,
++    const Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++          Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2);
++
++// Backward (adjoint) operation
++template <typename Dtype, bool packed>
++void caffe_cpu_interp2_backward(const int channels,
++	  Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    const Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2);
++
++template <typename Dtype, bool packed>
++void caffe_gpu_interp2_backward(const int channels,
++	  Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    const Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2);
++
++// Create Gaussian pyramid of an image. Assume output space is pre-allocated.
++// IN : [channels height width]
++template <typename Dtype, bool packed>
++void caffe_cpu_pyramid2(const int channels,
++    const Dtype *data, const int height, const int width,
++    Dtype *data_pyr, const int levels);
++
++template <typename Dtype, bool packed>
++void caffe_gpu_pyramid2(const int channels,
++    const Dtype *data, const int height, const int width,
++    Dtype *data_pyr, const int levels);
++
++  /*
++template <typename Dtype, bool packed>
++void caffe_cpu_mosaic(const int channels,
++    const Dtype *data1, const MosaicParameter mosaic_params1,
++    const Dtype *data_pyr, const int levels,
++          Dtype *data2, const MosaicParameter mosaic_params2);
++
++template <typename Dtype, bool packed>
++void caffe_gpu_mosaic(const int channels,
++    const Dtype *data1, const MosaicParameter mosaic_params1,
++    const Dtype *data_pyr, const int levels,
++          Dtype *data2, const MosaicParameter mosaic_params2);
++  */
++
++}  // namespace caffe
++
++#endif
+diff --git a/src/caffe/data_transformer.cpp b/src/caffe/data_transformer.cpp
+index 4aa87ec..dbb4102 100644
+--- a/src/caffe/data_transformer.cpp
++++ b/src/caffe/data_transformer.cpp
+@@ -51,6 +51,12 @@ DataTransformer<Dtype>::DataTransformer(const TransformationParameter& param, Ph
+       mean_values_.emplace_back(param_.mean_value(c));
+     }
+   }
++  // check if we want to do random scaling
++  if (param_.scale_factors_size() > 0) {
++    for (int i = 0; i < param_.scale_factors_size(); ++i) {
++      scale_factors_.push_back(param_.scale_factors(i));
++    }
++  }
+   InitRand();
+ }
+ 
+@@ -613,6 +619,207 @@ void DataTransformer<Dtype>::Transform(const Datum& datum, Dtype* transformed_da
+ 
+ 
+ template<typename Dtype>
++void DataTransformer<Dtype>::TransformImgAndSeg(
++    const std::vector<cv::Mat>& cv_img_seg,
++    TBlob<Dtype>* transformed_data_blob,
++    TBlob<Dtype>* transformed_label_blob,
++    const int ignore_label) {
++  CHECK(cv_img_seg.size() == 2) << "Input must contain image and seg.";
++
++  const int img_channels = cv_img_seg[0].channels();
++  // height and width may change due to pad for cropping
++  int img_height   = cv_img_seg[0].rows;
++  int img_width    = cv_img_seg[0].cols;
++
++  const int seg_channels = cv_img_seg[1].channels();
++  int seg_height   = cv_img_seg[1].rows;
++  int seg_width    = cv_img_seg[1].cols;
++
++  const int data_channels = transformed_data_blob->channels();
++  const int data_height   = transformed_data_blob->height();
++  const int data_width    = transformed_data_blob->width();
++
++  const int label_channels = transformed_label_blob->channels();
++  const int label_height   = transformed_label_blob->height();
++  const int label_width    = transformed_label_blob->width();
++
++  CHECK_EQ(seg_channels, 1);
++  CHECK_EQ(img_channels, data_channels);
++  CHECK_EQ(img_height, seg_height);
++  CHECK_EQ(img_width, seg_width);
++
++  CHECK_EQ(label_channels, 1);
++  CHECK_EQ(data_height, label_height);
++  CHECK_EQ(data_width, label_width);
++
++  CHECK(cv_img_seg[0].depth() == CV_8U)
++      << "Image data type must be unsigned byte";
++  CHECK(cv_img_seg[1].depth() == CV_8U)
++      << "Seg data type must be unsigned byte";
++
++  //const int crop_size = param_.crop_size();
++  int crop_width = 0;
++  int crop_height = 0;
++  CHECK((!param_.has_crop_size() && param_.has_crop_height() && param_.has_crop_width())
++	|| (!param_.has_crop_height() && !param_.has_crop_width()))
++    << "Must either specify crop_size or both crop_height and crop_width.";
++  if (param_.has_crop_size()) {
++    crop_width = param_.crop_size();
++    crop_height = param_.crop_size();
++  } 
++  if (param_.has_crop_height() && param_.has_crop_width()) {
++    crop_width = param_.crop_width();
++    crop_height = param_.crop_height();
++  }
++
++  const Dtype scale = param_.scale();
++  const bool do_mirror = param_.mirror() && Rand(2);
++  const bool has_mean_file = param_.has_mean_file();
++  const bool has_mean_values = mean_values_.size() > 0;
++
++  CHECK_GT(img_channels, 0);
++
++  float* mean = NULL;
++  if (has_mean_file) {
++    CHECK_EQ(img_channels, data_mean_.channels());
++    CHECK_EQ(img_height, data_mean_.height());
++    CHECK_EQ(img_width, data_mean_.width());
++    mean = data_mean_.mutable_cpu_data();
++  }
++  if (has_mean_values) {
++    CHECK(mean_values_.size() == 1 || mean_values_.size() == img_channels) <<
++     "Specify either 1 mean_value or as many as channels: " << img_channels;
++    if (img_channels > 1 && mean_values_.size() == 1) {
++      // Replicate the mean_value for simplicity
++      for (int c = 1; c < img_channels; ++c) {
++        mean_values_.push_back(mean_values_[0]);
++      }
++    }
++  }
++
++  // start to perform transformation
++  cv::Mat cv_cropped_img;
++  cv::Mat cv_cropped_seg;
++
++  // perform scaling
++  if (scale_factors_.size() > 0) {
++    int scale_ind = Rand(scale_factors_.size());
++    float scale   = scale_factors_[scale_ind];
++
++    if (scale != 1) {
++      img_height *= scale;
++      img_width  *= scale;
++      cv::resize(cv_img_seg[0], cv_cropped_img, cv::Size(img_width, img_height), 0, 0, 
++		 cv::INTER_LINEAR);
++      cv::resize(cv_img_seg[1], cv_cropped_seg, cv::Size(img_width, img_height), 0, 0, 
++		 cv::INTER_NEAREST);
++    } else {
++      cv_cropped_img = cv_img_seg[0];
++      cv_cropped_seg = cv_img_seg[1];
++    }
++  } else {
++    cv_cropped_img = cv_img_seg[0];
++    cv_cropped_seg = cv_img_seg[1];
++  }
++  //
++
++  int h_off = 0;
++  int w_off = 0;
++
++  // transform to double, since we will pad mean pixel values
++  cv_cropped_img.convertTo(cv_cropped_img, CV_64F);
++
++  // Check if we need to pad img to fit for crop_size
++  // copymakeborder
++  int pad_height = std::max(crop_height - img_height, 0);
++  int pad_width  = std::max(crop_width - img_width, 0);
++  if (pad_height > 0 || pad_width > 0) {
++    cv::copyMakeBorder(cv_cropped_img, cv_cropped_img, 0, pad_height,
++          0, pad_width, cv::BORDER_CONSTANT,
++          cv::Scalar(mean_values_[0], mean_values_[1], mean_values_[2]));
++    cv::copyMakeBorder(cv_cropped_seg, cv_cropped_seg, 0, pad_height,
++          0, pad_width, cv::BORDER_CONSTANT,
++          cv::Scalar(ignore_label));
++    // update height/width
++    img_height   = cv_cropped_img.rows;
++    img_width    = cv_cropped_img.cols;
++
++    seg_height   = cv_cropped_seg.rows;
++    seg_width    = cv_cropped_seg.cols;
++  }
++
++  // crop img/seg
++  if (crop_width && crop_height) {
++    CHECK_EQ(crop_height, data_height);
++    CHECK_EQ(crop_width, data_width);
++    // We only do random crop when we do training.
++    if (phase_ == TRAIN) {
++      h_off = Rand(img_height - crop_height + 1);
++      w_off = Rand(img_width - crop_width + 1);
++    } else {
++      // CHECK: use middle crop
++      h_off = (img_height - crop_height) / 2;
++      w_off = (img_width - crop_width) / 2;
++    }
++    cv::Rect roi(w_off, h_off, crop_width, crop_height);
++    cv_cropped_img = cv_cropped_img(roi);
++    cv_cropped_seg = cv_cropped_seg(roi);
++  }
++
++  CHECK(cv_cropped_img.data);
++  CHECK(cv_cropped_seg.data);
++
++  Dtype* transformed_data  = transformed_data_blob->mutable_cpu_data();
++  Dtype* transformed_label = transformed_label_blob->mutable_cpu_data();
++
++  int top_index;
++  const double* data_ptr;
++  const uchar* label_ptr;
++
++  for (int h = 0; h < data_height; ++h) {
++    data_ptr = cv_cropped_img.ptr<double>(h);
++    label_ptr = cv_cropped_seg.ptr<uchar>(h);
++
++    int data_index = 0;
++    int label_index = 0;
++
++    for (int w = 0; w < data_width; ++w) {
++      // for image
++      for (int c = 0; c < img_channels; ++c) {
++        if (do_mirror) {
++          top_index = (c * data_height + h) * data_width + (data_width - 1 - w);
++        } else {
++          top_index = (c * data_height + h) * data_width + w;
++        }
++        Dtype pixel = static_cast<Dtype>(data_ptr[data_index++]);
++        if (has_mean_file) {
++          int mean_index = (c * img_height + h_off + h) * img_width + w_off + w;
++          transformed_data[top_index] =
++            (pixel - mean[mean_index]) * scale;
++        } else {
++          if (has_mean_values) {
++            transformed_data[top_index] =
++              (pixel - mean_values_[c]) * scale;
++          } else {
++            transformed_data[top_index] = pixel * scale;
++          }
++        }
++      }
++
++      // for segmentation
++      if (do_mirror) {
++        top_index = h * data_width + data_width - 1 - w;
++      } else {
++        top_index = h * data_width + w;
++      }
++      Dtype pixel = static_cast<Dtype>(label_ptr[label_index++]);
++      transformed_label[top_index] = pixel;
++    }
++  }
++}
++
++
++template<typename Dtype>
+ void DataTransformer<Dtype>::TransformAnnotation(
+     const AnnotatedDatum& anno_datum, const bool do_resize,
+     const NormalizedBBox& crop_bbox, const bool do_mirror,
+diff --git a/src/caffe/layers/bn_layer.cpp b/src/caffe/layers/bn_layer.cpp
+new file mode 100644
+index 0000000..afc9f06
+--- /dev/null
++++ b/src/caffe/layers/bn_layer.cpp
+@@ -0,0 +1,377 @@
++#include <algorithm>
++#include <vector>
++
++#include "caffe/layers/bn_layer.hpp"
++#include "caffe/filler.hpp"
++#include "caffe/util/math_functions.hpp"
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  frozen_ = this->layer_param_.bn_param().frozen();
++  bn_momentum_ = this->layer_param_.bn_param().momentum();
++  bn_eps_ = this->layer_param_.bn_param().eps();
++  // Initialize parameters
++  if (this->blobs_.size() > 0) {
++    LOG(INFO) << "Skipping parameter initialization";
++  } else {
++    this->blobs_.resize(4);
++
++    const Type btype = blobs_type();
++
++    vector<int> shape;
++    shape.push_back(1);
++    shape.push_back(bottom[0]->channels());
++    shape.push_back(1);
++    shape.push_back(1);
++    // slope
++    this->blobs_[0] = Blob::create(btype, btype);
++    this->blobs_[0]->Reshape(shape);
++    if (btype == tp<Ftype>()) {
++        shared_ptr<Filler<Ftype>> slope_filler(
++            GetFiller<Ftype>(this->layer_param_.bn_param().slope_filler()));
++        slope_filler->Fill(this->blobs_[0].get());
++    } else {
++        shared_ptr<Filler<float>> slope_filler(
++            GetFiller<float>(this->layer_param_.bn_param().slope_filler()));
++        slope_filler->Fill(this->blobs_[0].get());
++    }
++    
++    // bias
++    this->blobs_[1] = Blob::create(btype, btype);
++    this->blobs_[1]->Reshape(shape);
++    if (btype==tp<Ftype>()) {
++        shared_ptr<Filler<Ftype>> bias_filler(
++            GetFiller<Ftype>(this->layer_param_.bn_param().bias_filler()));
++        bias_filler->Fill(this->blobs_[1].get());
++    } else {
++        shared_ptr<Filler<float>> bias_filler(
++            GetFiller<float>(this->layer_param_.bn_param().bias_filler()));
++        bias_filler->Fill(this->blobs_[1].get());
++    }
++    // moving average mean
++    this->blobs_[2] = Blob::create(btype, btype);
++    this->blobs_[2]->Reshape(shape);
++    this->blobs_[2]->set_data(0.);
++    // moving average variance
++    this->blobs_[3] = Blob::create(btype, btype);
++    this->blobs_[3]->Reshape(shape);
++    this->blobs_[3]->set_data(frozen_ ? 1. : 0.);
++  }
++  this->param_propagate_down_.resize(this->blobs_.size(), true);
++
++  // runing average stats does not use weight decay and learning rate
++  while (this->layer_param_.param_size() < 4){
++    this->layer_param_.mutable_param()->Add();
++  }
++  this->layer_param_.mutable_param(2)->set_lr_mult(0.);
++  this->layer_param_.mutable_param(2)->set_decay_mult(0.);
++
++  this->layer_param_.mutable_param(3)->set_lr_mult(0.);
++  this->layer_param_.mutable_param(3)->set_decay_mult(0.);
++
++  // shutdown scale and bias update in frozen mode
++  if (this->frozen_){
++    // slope
++    this->layer_param_.mutable_param(0)->set_lr_mult(0.);
++    this->layer_param_.mutable_param(0)->set_decay_mult(0.);
++
++    // bias
++    this->layer_param_.mutable_param(1)->set_lr_mult(0.);
++    this->layer_param_.mutable_param(1)->set_decay_mult(0.);
++  }
++
++  // =====================================
++  int N = bottom[0]->shape(0);
++  int C = bottom[0]->shape(1);
++  int H = bottom[0]->shape(2);
++  int W = bottom[0]->shape(3);
++
++  broadcast_buffer_ = Blob::create<Ftype>(N, C, H, W);
++  spatial_statistic_ = Blob::create<Ftype>(N, C, 1, 1);
++  batch_statistic_ = Blob::create<Ftype>(1, C, 1, 1);
++  x_norm_ = Blob::create<Ftype>(N, C, H, W);
++  x_inv_std_ = Blob::create<Ftype>(1, C, 1, 1);
++  spatial_sum_multiplier_ = Blob::create<Ftype>(1, 1, H, W);
++  batch_sum_multiplier_ = Blob::create<Ftype>(N, 1, 1, 1);
++}
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  num_ = bottom[0]->num();
++  channels_ = bottom[0]->channels();
++  height_ = bottom[0]->height();
++  width_ = bottom[0]->width();
++
++  top[0]->ReshapeLike(*(bottom[0]));
++
++  broadcast_buffer_->ReshapeLike(*(bottom[0]));
++  spatial_statistic_->Reshape(num_, channels_, 1, 1);
++  batch_statistic_->Reshape(1, channels_, 1, 1);
++
++  x_norm_->ReshapeLike(*(bottom[0]));
++  x_inv_std_->ReshapeLike(*batch_statistic_);
++
++  spatial_sum_multiplier_->Reshape(1, 1, height_, width_);
++  spatial_sum_multiplier_->set_data(1.);
++  batch_sum_multiplier_->Reshape(num_, 1, 1, 1);
++  batch_sum_multiplier_->set_data(1.);
++}
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
++  const vector<Blob*>& top) {
++  const Ftype* const_bottom_data = bottom[0]->cpu_data<Ftype>();
++  const Ftype* const_top_data = top[0]->cpu_data<Ftype>();
++  Ftype* top_data = top[0]->mutable_cpu_data<Ftype>();
++
++  const Ftype* scale_data = this->blobs_[0]->template cpu_data<Ftype>();
++  const Ftype* shift_data = this->blobs_[1]->template cpu_data<Ftype>();
++
++  // Mean normalization
++  if (frozen_ || this->phase_ == TEST) {
++    // Use the moving average mean
++    caffe_copy<Ftype>(batch_statistic_->count(), this->blobs_[2]->template cpu_data<Ftype>(),
++        batch_statistic_->template mutable_cpu_data<Ftype>());
++  } else {
++    // Compute the mean by averaging over spatial and batch dimensions.
++    caffe_cpu_gemv<Ftype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Ftype(1) / (height_ * width_), const_bottom_data,
++        spatial_sum_multiplier_->template cpu_data<Ftype>(), Ftype(0),
++        spatial_statistic_->template mutable_cpu_data<Ftype>());
++    caffe_cpu_gemv<Ftype>(CblasTrans, num_, channels_,
++        Ftype(1) / num_, spatial_statistic_->template cpu_data<Ftype>(),
++        batch_sum_multiplier_->template cpu_data<Ftype>(), Ftype(0),
++        batch_statistic_->template mutable_cpu_data<Ftype>());
++    // Add to the moving average
++    if (!frozen_) {
++      caffe_cpu_axpby<Ftype>(batch_statistic_->count(),
++          Ftype(1) - bn_momentum_, batch_statistic_->template cpu_data<Ftype>(),
++          bn_momentum_, this->blobs_[2]->template mutable_cpu_data<Ftype>());
++    }
++  }
++  // Broadcast the mean vector
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template cpu_data<Ftype>(), batch_statistic_->template cpu_data<Ftype>(),
++      Ftype(0), spatial_statistic_->template mutable_cpu_data<Ftype>());
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(-1),
++      spatial_statistic_->template cpu_data<Ftype>(), spatial_sum_multiplier_->template cpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_cpu_data<Ftype>());
++  // Subtract
++  caffe_add<Ftype>(broadcast_buffer_->count(), const_bottom_data,
++      broadcast_buffer_->template cpu_data<Ftype>(), top_data);
++
++  // Variance normalization
++  if (frozen_ || this->phase_ == TEST) {
++    // Use the moving average variance
++    caffe_copy<Ftype>(batch_statistic_->count(), this->blobs_[3]->template cpu_data<Ftype>(),
++        batch_statistic_->template mutable_cpu_data<Ftype>());
++  } else {
++    // calculate batch variance
++    caffe_powx<Ftype>(broadcast_buffer_->count(), const_top_data, Ftype(2),
++        broadcast_buffer_->template mutable_cpu_data<Ftype>());
++    caffe_cpu_gemv<Ftype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Ftype(1) / (height_ * width_), broadcast_buffer_->template cpu_data<Ftype>(),
++        spatial_sum_multiplier_->template cpu_data<Ftype>(), Ftype(0),
++        spatial_statistic_->template mutable_cpu_data<Ftype>());
++    caffe_cpu_gemv<Ftype>(CblasTrans, num_, channels_, Ftype(1) / num_,
++        spatial_statistic_->template cpu_data<Ftype>(), batch_sum_multiplier_->template cpu_data<Ftype>(),
++        Ftype(0), batch_statistic_->template mutable_cpu_data<Ftype>());
++
++    // Add to the moving average
++    caffe_cpu_axpby<Ftype>(batch_statistic_->count(),
++        Ftype(1) - bn_momentum_, batch_statistic_->template cpu_data<Ftype>(),
++        bn_momentum_, this->blobs_[3]->template mutable_cpu_data<Ftype>());
++  }
++
++  // Add eps
++  caffe_add_scalar<Ftype>(batch_statistic_->count(), bn_eps_,
++                   batch_statistic_->template mutable_cpu_data<Ftype>());
++  // Inverse standard deviation
++  caffe_powx<Ftype>(batch_statistic_->count(), batch_statistic_->template cpu_data<Ftype>(),
++             Ftype(-0.5), batch_statistic_->template mutable_cpu_data<Ftype>());
++
++  // Broadcast the inverse std
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Ftype(1), batch_sum_multiplier_->template cpu_data<Ftype>(), batch_statistic_->template cpu_data<Ftype>(),
++        Ftype(0), spatial_statistic_->template mutable_cpu_data<Ftype>());
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template cpu_data<Ftype>(), spatial_sum_multiplier_->template cpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_cpu_data<Ftype>());
++  // Multiply with the inverse std
++  caffe_mul<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template cpu_data<Ftype>(), top_data);
++
++  // Save the normalized inputs and std for backprop
++  if (!frozen_) {
++    caffe_copy<Ftype>(broadcast_buffer_->count(), const_top_data,
++        x_norm_->template mutable_cpu_data<Ftype>());
++    caffe_copy<Ftype>(batch_statistic_->count(), batch_statistic_->template cpu_data<Ftype>(),
++        x_inv_std_->template mutable_cpu_data<Ftype>());
++  }
++
++  // Scale
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template cpu_data<Ftype>(), scale_data,
++      Ftype(0), spatial_statistic_->template mutable_cpu_data<Ftype>());
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template cpu_data<Ftype>(), spatial_sum_multiplier_->template cpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_cpu_data<Ftype>());
++  caffe_mul<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template cpu_data<Ftype>(), top_data);
++
++  // Shift
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template cpu_data<Ftype>(), shift_data,
++      Ftype(0), spatial_statistic_->template mutable_cpu_data<Ftype>());
++  caffe_cpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template cpu_data<Ftype>(), spatial_sum_multiplier_->template cpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_cpu_data<Ftype>());
++  caffe_add<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template cpu_data<Ftype>(), top_data);
++}
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
++  const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
++  if (frozen_) {
++    if (propagate_down[0]) {
++      const Btype* const_top_diff = top[0]->cpu_diff<Btype>();
++      Btype* bottom_diff = bottom[0]->mutable_cpu_diff<Btype>();
++      // Use the moving average variance
++      caffe_copy<Btype>(batch_statistic_->count(), this->blobs_[3]->template cpu_data<Btype>(),
++          batch_statistic_->template mutable_cpu_data<Btype>());
++      caffe_add_scalar<Btype>(batch_statistic_->count(), bn_eps_,
++          batch_statistic_->template mutable_cpu_data<Btype>());
++      caffe_powx<Btype>(batch_statistic_->count(), batch_statistic_->template cpu_data<Btype>(),
++          Btype(-0.5), batch_statistic_->template mutable_cpu_data<Btype>());
++      // Divide slope with std
++      caffe_mul<Btype>(batch_statistic_->count(), this->blobs_[0]->template cpu_data<Btype>(),
++          batch_statistic_->template cpu_data<Btype>(), batch_statistic_->template mutable_cpu_data<Btype>());
++      // Broadcast
++      caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++          Btype(1), batch_sum_multiplier_->template cpu_data<Btype>(), batch_statistic_->template cpu_data<Btype>(),
++          Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++      caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++          height_ * width_, 1, Btype(1),
++          spatial_statistic_->template cpu_data<Btype>(), spatial_sum_multiplier_->template cpu_data<Btype>(),
++          Btype(0), broadcast_buffer_->template mutable_cpu_data<Btype>());
++      // Elementwise multiply top grad with (slope / std)
++      caffe_mul<Btype>(broadcast_buffer_->count(), const_top_diff,
++          broadcast_buffer_->template cpu_data<Btype>(), bottom_diff);
++    }
++    return;
++  }
++
++  // gradient w.r.t. slope
++  if (this->param_propagate_down_[0]) {
++    const Btype* const_top_diff = top[0]->cpu_diff<Btype>();
++    Btype* scale_diff = this->blobs_[0]->template mutable_cpu_diff<Btype>();
++    caffe_mul<Btype>(broadcast_buffer_->count(), x_norm_->template cpu_data<Btype>(), const_top_diff,
++        broadcast_buffer_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), broadcast_buffer_->template cpu_data<Btype>(),
++        spatial_sum_multiplier_->template cpu_data<Btype>(), Btype(0),
++        spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), batch_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(1), scale_diff);
++  }
++
++  // gradient w.r.t. bias
++  if (this->param_propagate_down_[1]) {
++    const Btype* const_top_diff = top[0]->cpu_diff<Btype>();
++    Btype* shift_diff = this->blobs_[1]->template mutable_cpu_diff<Btype>();
++    caffe_cpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), const_top_diff, spatial_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), batch_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(1), shift_diff);
++  }
++
++  // gradient w.r.t. normalized inputs
++  if (propagate_down[0]) {
++    const Btype* const_top_diff = top[0]->cpu_diff<Btype>();
++    const Btype* const_bottom_diff = bottom[0]->cpu_diff<Btype>();
++    Btype* bottom_diff = bottom[0]->mutable_cpu_diff<Btype>();
++    const Btype* scale_data = this->blobs_[0]->template cpu_data<Btype>();
++
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template cpu_data<Btype>(), scale_data,
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1), spatial_statistic_->template cpu_data<Btype>(),
++        spatial_sum_multiplier_->template cpu_data<Btype>(), Btype(0),
++        broadcast_buffer_->template mutable_cpu_data<Btype>());
++    caffe_mul<Btype>(broadcast_buffer_->count(), const_top_diff,
++        broadcast_buffer_->template cpu_data<Btype>(), broadcast_buffer_->template mutable_cpu_data<Btype>());
++
++    // sum of x_hat * (dl / dx_hat)
++    caffe_mul<Btype>(broadcast_buffer_->count(), x_norm_->template cpu_data<Btype>(),
++        broadcast_buffer_->template cpu_data<Btype>(), bottom_diff);
++    caffe_cpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), const_bottom_diff, spatial_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), batch_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), batch_statistic_->template mutable_cpu_data<Btype>());
++
++    // x_hat times the sum
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template cpu_data<Btype>(), batch_statistic_->template cpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), spatial_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), bottom_diff);
++    caffe_mul<Btype>(broadcast_buffer_->count(), x_norm_->template cpu_data<Btype>(),
++        const_bottom_diff, bottom_diff);
++
++    // Subtract the average of x_hat times the sum
++    caffe_cpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), broadcast_buffer_->template cpu_data<Btype>(),
++        spatial_sum_multiplier_->template cpu_data<Btype>(), Btype(0),
++        spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), batch_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), batch_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template cpu_data<Btype>(), batch_statistic_->template cpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), spatial_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(1), bottom_diff);
++    caffe_cpu_axpby<Btype>(broadcast_buffer_->count(), Btype(1),
++        broadcast_buffer_->template cpu_data<Btype>(), Btype(-1) / (num_ * height_ * width_),
++        bottom_diff);
++
++    // Multiply with the inverse std
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template cpu_data<Btype>(), x_inv_std_->template cpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_cpu_data<Btype>());
++    caffe_cpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template cpu_data<Btype>(), spatial_sum_multiplier_->template cpu_data<Btype>(),
++        Btype(0), broadcast_buffer_->template mutable_cpu_data<Btype>());
++    caffe_mul<Btype>(broadcast_buffer_->count(), const_bottom_diff,
++        broadcast_buffer_->template cpu_data<Btype>(), bottom_diff);
++  }
++}
++
++
++#ifdef CPU_ONLY
++STUB_GPU(BNLayer);
++#endif
++
++INSTANTIATE_CLASS_FB(BNLayer);
++REGISTER_LAYER_CLASS(BN);
++}  // namespace caffe
+diff --git a/src/caffe/layers/bn_layer.cu b/src/caffe/layers/bn_layer.cu
+new file mode 100644
+index 0000000..50477bd
+--- /dev/null
++++ b/src/caffe/layers/bn_layer.cu
+@@ -0,0 +1,255 @@
++#include <algorithm>
++#include <vector>
++
++#include "caffe/layers/bn_layer.hpp"
++#include "caffe/filler.hpp"
++#include "caffe/util/math_functions.hpp"
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::Forward_gpu(
++    const vector<Blob*>& bottom, const vector<Blob*>& top) {
++  const Ftype* const_bottom_data = bottom[0]->gpu_data<Ftype>();
++  const Ftype* const_top_data = top[0]->gpu_data<Ftype>();
++  Ftype* top_data = top[0]->mutable_gpu_data<Ftype>();
++
++  const Ftype* scale_data = this->blobs_[0]->template gpu_data<Ftype>();
++  const Ftype* shift_data = this->blobs_[1]->template gpu_data<Ftype>();
++
++  // Mean normalization
++  if (frozen_ || this->phase_ == TEST) {
++    // Use the moving average mean
++    caffe_copy(batch_statistic_->count(), this->blobs_[2]->template gpu_data<Ftype>(),
++        batch_statistic_->template mutable_gpu_data<Ftype>());
++  } else {
++    // Compute the mean by averaging over spatial and batch dimensions.
++    caffe_gpu_gemv<Ftype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Ftype(1) / (height_ * width_), const_bottom_data,
++        spatial_sum_multiplier_->template gpu_data<Ftype>(), Ftype(0),
++        spatial_statistic_->template mutable_gpu_data<Ftype>());
++    caffe_gpu_gemv<Ftype>(CblasTrans, num_, channels_,
++        Ftype(1) / num_, spatial_statistic_->template gpu_data<Ftype>(),
++        batch_sum_multiplier_->template gpu_data<Ftype>(), Ftype(0),
++        batch_statistic_->template mutable_gpu_data<Ftype>());
++    // Add to the moving average
++    if (!frozen_) {
++      caffe_gpu_axpby<Ftype>(batch_statistic_->count(),
++          Ftype(1) - bn_momentum_, batch_statistic_->template gpu_data<Ftype>(),
++          bn_momentum_, this->blobs_[2]->template mutable_gpu_data<Ftype>());
++    }
++  }
++  // Broadcast the mean vector
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template gpu_data<Ftype>(), batch_statistic_->template gpu_data<Ftype>(),
++      Ftype(0), spatial_statistic_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(-1),
++      spatial_statistic_->template gpu_data<Ftype>(), spatial_sum_multiplier_->template gpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_gpu_data<Ftype>());
++  // Subtract
++  caffe_gpu_add<Ftype>(broadcast_buffer_->count(), const_bottom_data,
++      broadcast_buffer_->template gpu_data<Ftype>(), top_data);
++
++  // Variance normalization
++  if (frozen_ || this->phase_ == TEST) {
++    // Use the moving average variance
++    caffe_copy(batch_statistic_->count(), this->blobs_[3]->template gpu_data<Ftype>(),
++        batch_statistic_->template mutable_gpu_data<Ftype>());
++  } else {
++    caffe_gpu_powx<Ftype>(broadcast_buffer_->count(), const_top_data, Ftype(2),
++        broadcast_buffer_->template mutable_gpu_data<Ftype>());
++    caffe_gpu_gemv<Ftype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Ftype(1) / (height_ * width_), broadcast_buffer_->template gpu_data<Ftype>(),
++        spatial_sum_multiplier_->template gpu_data<Ftype>(), Ftype(0),
++        spatial_statistic_->template mutable_gpu_data<Ftype>());
++    caffe_gpu_gemv<Ftype>(CblasTrans, num_, channels_, Ftype(1) / num_,
++        spatial_statistic_->template gpu_data<Ftype>(), batch_sum_multiplier_->template gpu_data<Ftype>(),
++        Ftype(0), batch_statistic_->template mutable_gpu_data<Ftype>());
++
++    // Add to the moving average
++    caffe_gpu_axpby<Ftype>(batch_statistic_->count(),
++        Ftype(1) - bn_momentum_, batch_statistic_->template gpu_data<Ftype>(),
++        bn_momentum_, this->blobs_[3]->template mutable_gpu_data<Ftype>());
++  }
++
++  // Add eps
++  caffe_gpu_add_scalar<Ftype>(batch_statistic_->count(), bn_eps_,
++        batch_statistic_->template mutable_gpu_data<Ftype>());
++  // Inverse standard deviation
++  caffe_gpu_powx<Ftype>(batch_statistic_->count(), batch_statistic_->template gpu_data<Ftype>(),
++        Ftype(-0.5), batch_statistic_->template mutable_gpu_data<Ftype>());
++  // Broadcast the inverse std
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template gpu_data<Ftype>(), batch_statistic_->template gpu_data<Ftype>(),
++      Ftype(0), spatial_statistic_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template gpu_data<Ftype>(), spatial_sum_multiplier_->template gpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_gpu_data<Ftype>());
++  // Multiply with the inverse std
++  caffe_gpu_mul<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template gpu_data<Ftype>(), top_data);
++
++  // Save the normalized inputs and std for backprop
++  if (!frozen_) {
++    caffe_copy<Ftype>(broadcast_buffer_->count(), const_top_data,
++        x_norm_->template mutable_gpu_data<Ftype>());
++    caffe_copy<Ftype>(batch_statistic_->count(), batch_statistic_->template gpu_data<Ftype>(),
++        x_inv_std_->template mutable_gpu_data<Ftype>());
++  }
++
++  // Scale
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template gpu_data<Ftype>(), scale_data,
++      Ftype(0), spatial_statistic_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template gpu_data<Ftype>(), spatial_sum_multiplier_->template gpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_mul<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template gpu_data<Ftype>(), top_data);
++
++  // Shift
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++      Ftype(1), batch_sum_multiplier_->template gpu_data<Ftype>(), shift_data,
++      Ftype(0), spatial_statistic_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_gemm<Ftype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++      height_ * width_, 1, Ftype(1),
++      spatial_statistic_->template gpu_data<Ftype>(), spatial_sum_multiplier_->template gpu_data<Ftype>(),
++      Ftype(0), broadcast_buffer_->template mutable_gpu_data<Ftype>());
++  caffe_gpu_add<Ftype>(broadcast_buffer_->count(), const_top_data,
++      broadcast_buffer_->template gpu_data<Ftype>(), top_data);
++}
++
++template <typename Ftype, typename Btype>
++void BNLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
++  const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
++  if (frozen_) {
++    if (propagate_down[0]) {
++      const Btype* const_top_diff = top[0]->gpu_diff<Btype>();
++      Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
++      // Use the moving average variance
++      caffe_copy<Btype>(batch_statistic_->count(), this->blobs_[3]->template gpu_data<Btype>(),
++          batch_statistic_->template mutable_gpu_data<Btype>());
++      caffe_gpu_add_scalar<Btype>(batch_statistic_->count(), bn_eps_,
++          batch_statistic_->template mutable_gpu_data<Btype>());
++      caffe_gpu_powx<Btype>(batch_statistic_->count(), batch_statistic_->template gpu_data<Btype>(),
++          Btype(-0.5), batch_statistic_->template mutable_gpu_data<Btype>());
++      // Multiple slope with inverse std
++      caffe_gpu_mul<Btype>(batch_statistic_->count(), this->blobs_[0]->template gpu_data<Btype>(),
++          batch_statistic_->template gpu_data<Btype>(), batch_statistic_->template mutable_gpu_data<Btype>());
++      // Broadcast
++      caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++          Btype(1), batch_sum_multiplier_->template gpu_data<Btype>(), batch_statistic_->template gpu_data<Btype>(),
++          Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++      caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++          height_ * width_, 1, Btype(1),
++          spatial_statistic_->template gpu_data<Btype>(), spatial_sum_multiplier_->template gpu_data<Btype>(),
++          Btype(0), broadcast_buffer_->template mutable_gpu_data<Btype>());
++      // Elementwise multiply top grad with (slope / std)
++      caffe_gpu_mul<Btype>(broadcast_buffer_->count(), const_top_diff,
++          broadcast_buffer_->template gpu_data<Btype>(), bottom_diff);
++    }
++    return;
++  }
++
++  // gradient w.r.t. slope
++  if (this->param_propagate_down_[0]) {
++    const Btype* const_top_diff = top[0]->gpu_diff<Btype>();
++    Btype* scale_diff = this->blobs_[0]->template mutable_gpu_diff<Btype>();
++    caffe_gpu_mul<Btype>(broadcast_buffer_->count(), x_norm_->template gpu_data<Btype>(), const_top_diff,
++        broadcast_buffer_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), broadcast_buffer_->template gpu_data<Btype>(),
++        spatial_sum_multiplier_->template gpu_data<Btype>(), Btype(0),
++        spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), batch_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(1), scale_diff);
++  }
++
++  // gradient w.r.t. bias
++  if (this->param_propagate_down_[1]) {
++    const Btype* const_top_diff = top[0]->gpu_diff<Btype>();
++    Btype* shift_diff = this->blobs_[1]->template mutable_gpu_diff<Btype>();
++    caffe_gpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), const_top_diff, spatial_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), batch_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(1), shift_diff);
++  }
++
++  // gradient w.r.t. normalized inputs
++  if (propagate_down[0]) {
++    const Btype* const_top_diff = top[0]->gpu_diff<Btype>();
++    const Btype* const_bottom_diff = bottom[0]->gpu_diff<Btype>();
++    Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
++    const Btype* scale_data = this->blobs_[0]->template gpu_data<Btype>();
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template gpu_data<Btype>(), scale_data,
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1), spatial_statistic_->template gpu_data<Btype>(),
++        spatial_sum_multiplier_->template gpu_data<Btype>(), Btype(0),
++        broadcast_buffer_->template mutable_gpu_data<Btype>());
++    caffe_gpu_mul<Btype>(broadcast_buffer_->count(), const_top_diff,
++        broadcast_buffer_->template gpu_data<Btype>(), broadcast_buffer_->template mutable_gpu_data<Btype>());
++
++    // sum of x_hat * (dl / dx_hat)
++    caffe_gpu_mul<Btype>(broadcast_buffer_->count(), x_norm_->template gpu_data<Btype>(),
++        broadcast_buffer_->template gpu_data<Btype>(), bottom_diff);
++    caffe_gpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), const_bottom_diff, spatial_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), batch_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), batch_statistic_->template mutable_gpu_data<Btype>());
++
++    // x_hat times the sum
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template gpu_data<Btype>(), batch_statistic_->template gpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), spatial_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), bottom_diff);
++    caffe_gpu_mul<Btype>(broadcast_buffer_->count(), x_norm_->template gpu_data<Btype>(),
++        const_bottom_diff, bottom_diff);
++
++    // Subtract the average of x_hat times the sum
++    caffe_gpu_gemv<Btype>(CblasNoTrans, num_ * channels_, height_ * width_,
++        Btype(1), broadcast_buffer_->template gpu_data<Btype>(),
++        spatial_sum_multiplier_->template gpu_data<Btype>(), Btype(0),
++        spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemv<Btype>(CblasTrans, num_, channels_, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), batch_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), batch_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template gpu_data<Btype>(), batch_statistic_->template gpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), spatial_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(1), bottom_diff);
++    caffe_gpu_axpby<Btype>(broadcast_buffer_->count(), Btype(1),
++        broadcast_buffer_->template gpu_data<Btype>(), Btype(-1) / (num_ * height_ * width_),
++        bottom_diff);
++
++    // Multiply with the inverse std
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_, channels_, 1,
++        Btype(1), batch_sum_multiplier_->template gpu_data<Btype>(), x_inv_std_->template gpu_data<Btype>(),
++        Btype(0), spatial_statistic_->template mutable_gpu_data<Btype>());
++    caffe_gpu_gemm<Btype>(CblasNoTrans, CblasNoTrans, num_ * channels_,
++        height_ * width_, 1, Btype(1),
++        spatial_statistic_->template gpu_data<Btype>(), spatial_sum_multiplier_->template gpu_data<Btype>(),
++        Btype(0), broadcast_buffer_->template mutable_gpu_data<Btype>());
++    caffe_gpu_mul<Btype>(broadcast_buffer_->count(), const_bottom_diff,
++        broadcast_buffer_->template gpu_data<Btype>(), bottom_diff);
++  }
++}
++
++INSTANTIATE_LAYER_GPU_FUNCS_FB(BNLayer);
++
++}  // namespace caffe
+diff --git a/src/caffe/layers/cudnn_bn_layer.cpp b/src/caffe/layers/cudnn_bn_layer.cpp
+new file mode 100644
+index 0000000..784240b
+--- /dev/null
++++ b/src/caffe/layers/cudnn_bn_layer.cpp
+@@ -0,0 +1,92 @@
++#ifdef USE_CUDNN
++#include <algorithm>
++#include <cfloat>
++#include <vector>
++
++#include "caffe/layers/cudnn_bn_layer.hpp"
++
++#if CUDNN_VERSION_MIN(5, 0, 0)
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++void CuDNNBNLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  BNLayer<Ftype, Btype>::LayerSetUp(bottom, top);
++  save_mean_->ReshapeLike(*(this->blobs_[2]));
++  save_inv_variance_->ReshapeLike(*(this->blobs_[3]));
++
++  // Initialize CUDNN.
++  cudnn::createTensor4dDesc<Ftype>(&fwd_bottom_desc_);
++  cudnn::createTensor4dDesc<Ftype>(&fwd_top_desc_);
++  cudnn::createTensor4dDesc<Ftype>(&fwd_bn_param_desc_);
++  cudnn::createTensor4dDesc<Btype>(&bwd_bottom_desc_);
++  cudnn::createTensor4dDesc<Btype>(&bwd_top_desc_);
++  cudnn::createTensor4dDesc<Btype>(&bwd_bn_param_desc_);
++#if CUDNN_VERSION_MIN(7, 0, 0)
++  mode_ = CUDNN_BATCHNORM_SPATIAL_PERSISTENT;
++#else
++  mode_ = CUDNN_BATCHNORM_SPATIAL;      // only SPATIAL mode is supported
++#endif
++
++  handles_setup_ = true;
++  
++  LOG(INFO)<<"using cuDNN BN engine";
++}
++
++template <typename Ftype, typename Btype>
++void CuDNNBNLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  // Do not call BNLayer::Reshape function as some members are unnecessary
++  this->num_ = bottom[0]->num();
++  this->channels_ = bottom[0]->channels();
++  this->height_ = bottom[0]->height();
++  this->width_ = bottom[0]->width();
++
++  top[0]->ReshapeLike(*(bottom[0]));
++
++  // CUDNN tensors
++  cudnn::setTensor4dDesc<Ftype>(&fwd_bottom_desc_, this->num_, this->channels_,
++                                this->height_, this->width_);
++  cudnn::setTensor4dDesc<Ftype>(&fwd_top_desc_, this->num_, this->channels_,
++                                this->height_, this->width_);
++  cudnn::setTensor4dDesc<Btype>(&bwd_bottom_desc_, this->num_, this->channels_,
++                                this->height_, this->width_);
++  cudnn::setTensor4dDesc<Btype>(&bwd_top_desc_, this->num_, this->channels_,
++                                this->height_, this->width_);
++  // Fix to the spatial mode
++  CUDNN_CHECK(cudnnDeriveBNTensorDescriptor(fwd_bn_param_desc_,
++      fwd_bottom_desc_, mode_));
++  CUDNN_CHECK(cudnnDeriveBNTensorDescriptor(bwd_bn_param_desc_,
++      bwd_bottom_desc_, mode_));
++
++  if (this->frozen_){
++    this->broadcast_buffer_->ReshapeLike(*(bottom[0]));
++    this->spatial_statistic_->Reshape(this->num_, this->channels_, 1, 1);
++    this->batch_statistic_->Reshape(1, this->channels_, 1, 1);
++
++    this->spatial_sum_multiplier_->Reshape(1, 1, this->height_, this->width_);
++    this->spatial_sum_multiplier_->set_data(1.F);
++    this->batch_sum_multiplier_->Reshape(this->num_, 1, 1, 1);
++    this->batch_sum_multiplier_->set_data(1.F);
++  }
++}
++
++template <typename Ftype, typename Btype>
++CuDNNBNLayer<Ftype, Btype>::~CuDNNBNLayer() {
++  // Check that handles have been setup before destroying.
++  if (!handles_setup_) { return; }
++
++  cudnnDestroyTensorDescriptor(fwd_bottom_desc_);
++  cudnnDestroyTensorDescriptor(bwd_bottom_desc_);
++  cudnnDestroyTensorDescriptor(fwd_top_desc_);
++  cudnnDestroyTensorDescriptor(bwd_top_desc_);
++  cudnnDestroyTensorDescriptor(fwd_bn_param_desc_);
++  cudnnDestroyTensorDescriptor(bwd_bn_param_desc_);
++}
++
++INSTANTIATE_CLASS_FB(CuDNNBNLayer);
++
++}  // namespace caffe
++#endif
++#endif
+diff --git a/src/caffe/layers/cudnn_bn_layer.cu b/src/caffe/layers/cudnn_bn_layer.cu
+new file mode 100644
+index 0000000..ed69f32
+--- /dev/null
++++ b/src/caffe/layers/cudnn_bn_layer.cu
+@@ -0,0 +1,94 @@
++#ifdef USE_CUDNN
++#include <algorithm>
++#include <cfloat>
++#include <vector>
++
++#include "caffe/layers/cudnn_bn_layer.hpp"
++
++#if CUDNN_VERSION_MIN(5, 0, 0)
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++void CuDNNBNLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
++    const vector<Blob*>& top) {
++  const Ftype* bottom_data = bottom[0]->gpu_data<Ftype>();
++  Ftype* top_data = top[0]->mutable_gpu_data<Ftype>();
++  const Ftype* scale_data = this->blobs_[0]->template gpu_data<Ftype>();
++  const Ftype* bias_data = this->blobs_[1]->template gpu_data<Ftype>();
++
++  const double epsilon = max(this->bn_eps_, CUDNN_BN_MIN_EPSILON);
++
++  if (this->phase_ == TEST || this->frozen_) {
++    const Ftype* running_mean_data = this->blobs_[2]->template gpu_data<Ftype>();
++    const Ftype* running_variance_data = this->blobs_[3]->template gpu_data<Ftype>();
++    CUDNN_CHECK(cudnnBatchNormalizationForwardInference(Caffe::cudnn_handle(0),
++        CUDNN_BATCHNORM_SPATIAL,
++        cudnn::dataType<Ftype>::one,
++        cudnn::dataType<Ftype>::zero,
++        fwd_bottom_desc_, bottom_data,
++        fwd_top_desc_, top_data,
++        fwd_bn_param_desc_, scale_data, bias_data,
++        running_mean_data, running_variance_data,
++        epsilon));
++  } else {
++    Ftype* running_mean_data = this->blobs_[2]->template mutable_gpu_data<Ftype>();
++    Ftype* running_variance_data = this->blobs_[3]->template mutable_gpu_data<Ftype>();
++    Ftype* save_mean_data = save_mean_->template mutable_gpu_data<Ftype>();
++    Ftype* save_inv_variance_data = save_inv_variance_->template mutable_gpu_data<Ftype>();
++    CUDNN_CHECK(cudnnBatchNormalizationForwardTraining(Caffe::cudnn_handle(0),
++        mode_,
++        cudnn::dataType<Ftype>::one,
++        cudnn::dataType<Ftype>::zero,
++        fwd_bottom_desc_, bottom_data,
++        fwd_top_desc_, top_data,
++        fwd_bn_param_desc_, scale_data, bias_data,
++        1 - this->bn_momentum_,
++        running_mean_data, running_variance_data,
++        epsilon,
++        save_mean_data, save_inv_variance_data));
++  }
++}
++
++template <typename Ftype, typename Btype>
++void CuDNNBNLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
++    const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
++   if (this->frozen_){
++     BNLayer<Ftype, Btype>::Backward_gpu(top, propagate_down, bottom);
++     return;
++   }
++  if (propagate_down[0] || this->param_propagate_down_[0] ||
++      this->param_propagate_down_[1]) {
++    const Btype* top_diff = top[0]->gpu_diff<Btype>();
++    const Btype* bottom_data = bottom[0]->gpu_data<Btype>();
++    Btype* bottom_diff = bottom[0]->mutable_gpu_diff<Btype>();
++    const Btype* scale_data = this->blobs_[0]->template gpu_data<Btype>();
++    Btype* scale_diff = this->blobs_[0]->template mutable_gpu_diff<Btype>();
++    Btype* bias_diff = this->blobs_[1]->template mutable_gpu_diff<Btype>();
++    const Btype* save_mean_data = save_mean_->template gpu_data<Btype>();
++    const Btype* save_inv_variance_data = save_inv_variance_->template gpu_data<Btype>();
++
++    const double epsilon = max(this->bn_eps_, CUDNN_BN_MIN_EPSILON);
++
++    CUDNN_CHECK(cudnnBatchNormalizationBackward(Caffe::cudnn_handle(0),
++        mode_,
++        cudnn::dataType<Btype>::one,
++        cudnn::dataType<Btype>::zero,
++        cudnn::dataType<Btype>::one,
++        cudnn::dataType<Btype>::one,
++        bwd_bottom_desc_, bottom_data,
++        bwd_top_desc_, top_diff,
++        bwd_bottom_desc_, bottom_diff,
++        bwd_bn_param_desc_, scale_data,
++        scale_diff, bias_diff,
++        epsilon,
++        save_mean_data, save_inv_variance_data));
++
++  }
++}
++
++INSTANTIATE_LAYER_GPU_FUNCS_FB(CuDNNBNLayer);
++
++}  // namespace caffe
++#endif
++#endif
+diff --git a/src/caffe/layers/image_seg_data_layer.cpp b/src/caffe/layers/image_seg_data_layer.cpp
+new file mode 100755
+index 0000000..e7ad7af
+--- /dev/null
++++ b/src/caffe/layers/image_seg_data_layer.cpp
+@@ -0,0 +1,400 @@
++#include <fstream>  // NOLINT(readability/streams)
++#include <iostream>  // NOLINT(readability/streams)
++#include <string>
++#include <utility>
++#include <vector>
++#include <algorithm>
++
++#include <opencv2/core/core.hpp>
++#include <opencv2/highgui/highgui.hpp>
++#include <opencv2/highgui/highgui_c.h>
++#include <opencv2/imgproc/imgproc.hpp>
++
++#include "caffe/data_transformer.hpp"
++#include "caffe/layers/base_data_layer.hpp"
++#include "caffe/layers/image_seg_data_layer.hpp"
++#include "caffe/util/benchmark.hpp"
++#include "caffe/util/io.hpp"
++#include "caffe/util/math_functions.hpp"
++#include "caffe/util/rng.hpp"
++#include "caffe/parallel.hpp"
++
++#define IDL_CACHE_PROGRESS 0.05F
++
++namespace caffe {
++
++static std::mutex idl_mutex_;
++
++static size_t idl_id(const string& ph, const string& name) {
++  std::lock_guard<std::mutex> lock(idl_mutex_);
++  static size_t id = 0UL;
++  static map<string, size_t> ph_names;
++  string ph_name = ph + name;
++  auto it = ph_names.find(ph_name);
++  if (it != ph_names.end()) {
++    return it->second;
++  }
++  CHECK_LT(id, MAX_IDL_CACHEABLE);
++  ph_names.emplace(ph_name, id);
++  return id++;
++};
++
++template <typename Ftype, typename Btype>
++ImageSegDataLayer<Ftype, Btype>::ImageSegDataLayer(const LayerParameter& param, size_t solver_rank)
++    : BasePrefetchingDataLayer<Ftype, Btype>(param, solver_rank),
++      id_(idl_id(Phase_Name(this->phase_), this->name())),
++      epoch_count_(0UL) {
++  LOG_IF(INFO, P2PManager::global_rank() == 0)
++             << this->print_current_device() << " ImageSegDataLayer: " << this
++             << " name: " << this->name()
++             << " id: " << id_
++             << " threads: " << this->threads_num();
++}
++
++template <typename Ftype, typename Btype>
++ImageSegDataLayer<Ftype, Btype>::~ImageSegDataLayer<Ftype, Btype>() {
++  if (layer_inititialized_flag_.is_set()) {
++    this->StopInternalThread();
++  }
++}
++
++template <typename Ftype, typename Btype>
++void ImageSegDataLayer<Ftype, Btype>::DataLayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  TBlob<Btype> transformed_data;
++  TBlob<Btype> transformed_label;
++
++  const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
++  const TransformationParameter transform_param = this->layer_param_.transform_param();
++  const int new_height = image_data_param.new_height();
++  const int new_width  = image_data_param.new_width();
++  const int short_side = image_data_param.short_side();
++  const int crop = this->layer_param_.transform_param().crop_size();
++  const bool is_color  = image_data_param.is_color();
++  const string& root_folder = image_data_param.root_folder();
++  const int label_type = image_data_param.label_type();
++
++  CHECK((new_height == 0 && new_width == 0) ||
++      (new_height > 0 && new_width > 0)) << "Current implementation requires "
++      "new_height and new_width to be set at the same time.";
++
++  if (this->rank_ % Caffe::device_in_use_per_host_count() == 0) {
++    // Read the file with file_names and labels
++    lines_[id_].clear();
++    const string &source = image_data_param.source();
++    LOG(INFO) << "Opening file " << source;
++    std::ifstream infile(source.c_str());
++    CHECK(infile.good()) << "File " << source;
++    string linestr;
++    while (std::getline(infile, linestr)) {
++      std::istringstream iss(linestr);
++      string img_file_name;
++      iss >> img_file_name;
++      string seg_file_name = "";
++      if (label_type != ImageDataParameter_LabelType_NONE) {
++        iss >> seg_file_name;
++      }
++      lines_[id_].emplace_back(std::make_pair(img_file_name, seg_file_name));
++    }
++    if (image_data_param.shuffle()) {
++      // randomly shuffle data
++      LOG(INFO) << "Shuffling data";
++      prefetch_rng_.reset(new Caffe::RNG(caffe_rng_rand()));
++      ShuffleImages();
++    }
++    if (image_data_param.dataset_share_per_node() > 1.F
++        && this->phase_ == TRAIN) {
++      lines_[id_].resize(std::lround(lines_[id_].size()
++          / image_data_param.dataset_share_per_node()));
++    }
++  }
++  LOG_IF(INFO, P2PManager::global_rank() == 0)
++  << this->print_current_device() << " A total of " << lines_[id_].size() << " images.";
++
++  size_t skip = 0UL;
++  // Check if we would need to randomly skip a few data points
++  if (image_data_param.rand_skip()) {
++    if (Caffe::gpus().size() > 1) {
++      LOG(WARNING) << "Skipping data points is not supported in multiGPU mode";
++    } else {
++      skip = caffe_rng_rand() % image_data_param.rand_skip();
++      LOG(INFO) << "Skipping first " << skip << " data points";
++      CHECK_GT(lines_[id_].size(), skip) << "Not enough points to skip";
++    }
++  }
++  line_ids_.resize(this->threads_num());
++  for (size_t i = 0; i < this->threads_num(); ++i) {
++    line_ids_[i] = (this->rank_ % Caffe::device_in_use_per_host_count()) *
++        this->threads_num() + i + skip;
++  }
++
++  // Read an image, and use it to initialize the top blob.
++  const string& img_file_name = lines_[id_][line_ids_[0]].first;
++  bool from_cache = false;
++  cv::Mat cv_img = next_mat(root_folder, img_file_name, new_height, new_width ,is_color, short_side,
++      from_cache);
++  CHECK(cv_img.data) << "Could not load " << root_folder + img_file_name;
++  // Reshape prefetch_data and top[0] according to the batch_size.
++  const int batch_size = image_data_param.batch_size();
++  CHECK_GT(batch_size, 0) << "Positive batch size required";
++  int crop_height = 0;
++  int crop_width = 0;
++  CHECK((!transform_param.has_crop_size() && transform_param.has_crop_height() && transform_param.has_crop_width())
++	|| (!transform_param.has_crop_height() && !transform_param.has_crop_width()))
++    << "Must either specify crop_size or both crop_height and crop_width.";
++  if (transform_param.has_crop_size()) {
++    crop_height = crop;
++    crop_width = crop;
++  } 
++  if (transform_param.has_crop_height() && transform_param.has_crop_width()) {
++    crop_height = transform_param.crop_height();
++    crop_width = transform_param.crop_width();
++  }
++  if (crop_width <= 0 || crop_height <= 0) {
++    LOG_FIRST_N(INFO, 1) << "Crop is not set. Using '" << root_folder + img_file_name
++                         << "' as a model, w=" << cv_img.rows << ", h=" << cv_img.cols;
++    crop_height = cv_img.rows;
++    crop_width = cv_img.cols;
++  }
++  vector<int> top_shape { batch_size, cv_img.channels(), crop_height, crop_width };
++  transformed_data.Reshape(top_shape);
++  top[0]->Reshape(top_shape);
++  LOG_IF(INFO, P2PManager::global_rank() == 0) << "output data size: " << top[0]->num() << ", "
++    << top[0]->channels() << ", " << top[0]->height() << ", "
++    << top[0]->width();
++  // label image
++  vector<int> label_shape { batch_size, 1, crop_height, crop_width };
++  transformed_label.Reshape(label_shape);
++  top[1]->Reshape(label_shape);
++  this->batch_transformer_->reshape(top_shape, label_shape);
++  layer_inititialized_flag_.set();
++}
++
++template <typename Ftype, typename Btype>
++void ImageSegDataLayer<Ftype, Btype>::ShuffleImages() {
++  caffe::rng_t* prefetch_rng =
++      static_cast<caffe::rng_t*>(prefetch_rng_->generator());
++  shuffle(lines_[id_].begin(), lines_[id_].end(), prefetch_rng);
++}
++
++template<typename Ftype, typename Btype>
++void ImageSegDataLayer<Ftype, Btype>::InitializePrefetch() {}
++
++template<typename Ftype, typename Btype>
++cv::Mat ImageSegDataLayer<Ftype, Btype>::next_mat(const string& root_folder, const string& file_name,
++                                               int height, int width,
++                                               bool is_color, int short_side, bool& from_cache) {
++  from_cache = false;
++  if (this->layer_param_.image_data_param().cache()) {
++    std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
++    if (cache_[id_].size() > 0) {
++      auto it = cache_[id_].find(file_name);
++      if (it != cache_[id_].end()) {
++        from_cache = true;
++        return it->second[0]; // it->second.first: img, .second: seg
++      }
++    }
++  }
++  return ReadImageToCVMat(root_folder + file_name, height, width, is_color, short_side);
++}
++
++template<typename Ftype, typename Btype>
++std::vector<cv::Mat> ImageSegDataLayer<Ftype, Btype>::next_mat_vector(
++      const string& root_folder, const std::pair<std::string, std::string> file_names,
++      int height, int width, bool is_color, int short_side, bool& from_cache, 
++      const int label_type, const int ignore_label) {
++  from_cache = false;
++  if (this->layer_param_.image_data_param().cache()) {
++    std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
++    if (cache_[id_].size() > 0) {
++      auto it = cache_[id_].find(file_names.first);
++      if (it != cache_[id_].end()) {
++        from_cache = true;
++        return it->second;
++      }
++    }
++  }
++  std::vector<cv::Mat> cv_img_seg;
++  // img
++  cv_img_seg.push_back(ReadImageToCVMat(root_folder + file_names.first, height, width, is_color, short_side));
++  if (!cv_img_seg[0].data) {
++      DLOG(INFO) << "Fail to load img: " << root_folder + file_names.first;
++  }
++  // seg
++  if (label_type == ImageDataParameter_LabelType_PIXEL) {
++    cv_img_seg.push_back(ReadImageToCVMat(root_folder + file_names.second,
++            height, width, false, short_side));
++    if (!cv_img_seg[1].data) {
++        DLOG(INFO) << "Fail to load seg: " << root_folder + file_names.second;
++    }
++  }
++  else if (label_type == ImageDataParameter_LabelType_IMAGE) {
++    const int label = atoi(file_names.second.c_str());
++    cv::Mat seg(cv_img_seg[0].rows, cv_img_seg[0].cols, 
++                CV_8UC1, cv::Scalar(label));
++    cv_img_seg.push_back(seg);      
++  }
++  else {
++    cv::Mat seg(cv_img_seg[0].rows, cv_img_seg[0].cols, 
++                CV_8UC1, cv::Scalar(ignore_label));
++    cv_img_seg.push_back(seg);
++  }
++  return cv_img_seg;
++}
++
++template <typename Ftype, typename Btype>
++bool ImageSegDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, size_t queue_id) {
++  TBlob<Btype> transformed_data;
++  TBlob<Btype> transformed_label;
++
++  CHECK(batch->data_->count());
++  const ImageDataParameter& image_data_param = this->layer_param_.image_data_param();
++  const TransformationParameter transform_param = this->layer_param_.transform_param();
++  const int batch_size = image_data_param.batch_size();
++  const int new_height = image_data_param.new_height();
++  const int new_width = image_data_param.new_width();
++  const int short_side = image_data_param.short_side();
++  const int crop = this->layer_param_.transform_param().crop_size();
++  const bool is_color = image_data_param.is_color();
++  const bool cache_on = image_data_param.cache();
++  const bool shuffle = image_data_param.shuffle();
++  const string& root_folder = image_data_param.root_folder();
++  const int label_type = image_data_param.label_type();
++  const int ignore_label = image_data_param.ignore_label();
++  unordered_map<std::string, std::vector<cv::Mat>>& cache = cache_[id_];
++
++  size_t line_id = line_ids_[thread_id];
++  const size_t line_bucket = Caffe::device_in_use_per_host_count() * this->threads_num();
++  const size_t lines_size = lines_[id_].size();
++  // Reshape according to the first image of each batch
++  // on single input batches allows for inputs of varying dimension.
++  const string& file_name = lines_[id_][line_id].first;
++  bool from_cache = false;
++  cv::Mat cv_img = next_mat(root_folder, file_name, new_height, new_width, is_color, short_side,
++      from_cache);
++
++  CHECK(cv_img.data) << "Could not load " << (root_folder + file_name);
++  int crop_height = 0;
++  int crop_width = 0;
++  CHECK((!transform_param.has_crop_size() && transform_param.has_crop_height() && transform_param.has_crop_width())
++	|| (!transform_param.has_crop_height() && !transform_param.has_crop_width()))
++    << "Must either specify crop_size or both crop_height and crop_width.";
++  if (transform_param.has_crop_size()) {
++    crop_height = crop;
++    crop_width = crop;
++  } 
++  if (transform_param.has_crop_height() && transform_param.has_crop_width()) {
++    crop_height = transform_param.crop_height();
++    crop_width = transform_param.crop_width();
++  }
++  if (crop_width <= 0 || crop_height <= 0) {
++    LOG_FIRST_N(INFO, 1) << "Crop is not set. Using '" << root_folder + file_name
++                         << "' as a model, w=" << cv_img.rows << ", h=" << cv_img.cols;
++    crop_height = cv_img.rows;
++    crop_width = cv_img.cols;
++  }
++
++  // Infer the expected blob shape from a cv_img.
++  vector<int> top_shape { batch_size, cv_img.channels(), crop_height, crop_width };
++  transformed_data.Reshape(top_shape);
++  batch->data_->Reshape(top_shape);
++  vector<int> label_shape {batch_size, 1, crop_height, crop_width };
++  transformed_label.Reshape(label_shape);
++  batch->label_->Reshape(label_shape);
++  vector<Btype> tmp(top_shape[1] * top_shape[2] * top_shape[3]);
++  Btype* prefetch_data = batch->data_->mutable_cpu_data<Btype>();
++  Btype* prefetch_label = batch->label_->mutable_cpu_data<Btype>();
++  Packing packing = NHWC;
++
++  // datum scales
++  for (int item_id = 0; item_id < batch_size; ++item_id) {
++    CHECK_GT(lines_size, line_id);
++    const std::pair<string, string>& file_names = lines_[id_][line_id];
++    from_cache = false;
++    vector<cv::Mat> cv_img_seg;
++    cv_img_seg = next_mat_vector(root_folder, file_names, new_height, new_width, is_color, short_side, 
++                                 from_cache, label_type, ignore_label);
++    if (cv_img_seg[0].data) {
++      int offset;
++      offset = batch->data_->offset(item_id);
++      transformed_data.set_cpu_data(prefetch_data + offset);
++
++      offset = batch->label_->offset(item_id);
++      transformed_label.set_cpu_data(prefetch_label + offset);
++
++#if defined(USE_CUDNN)
++      this->bdt(thread_id)->TransformImgAndSeg(cv_img_seg, 
++          &(transformed_data), &(transformed_label), ignore_label);
++#else
++      CHECK_EQ(buf_len, tmp.size());
++      this->bdt(thread_id)->TransformImgAndSeg(cv_img_seg, 
++          &(transformed_data), &(transformed_label), ignore_label);
++      hwc2chw(top_shape[1], top_shape[3], top_shape[2], tmp.data(), prefetch_data + offset);
++      packing = NCHW;
++#endif
++    }
++    if (cache_on && !cached_[id_] && !from_cache) {
++      std::lock_guard<std::mutex> lock(cache_mutex_[id_]);
++      if (cv_img_seg[0].data != nullptr && cv_img_seg[1].data != nullptr) {
++        auto em = cache.emplace(file_names.first, cv_img_seg);
++        if (em.second) {
++          ++cached_num_[id_];
++        } else {
++          DLOG(WARNING) << this->print_current_device()
++                        << " Duplicate @ " << line_id << " " 
++                        << file_names.first << " " << file_names.second;
++        }
++      } else {
++        ++failed_num_[id_];
++      }
++      if (cached_num_[id_] + failed_num_[id_] >= lines_size) {
++        cached_[id_] = true;
++        LOG_IF(INFO, P2PManager::global_rank() == 0) << cache.size()
++                  << " objects cached for " << Phase_Name(this->phase_)
++                  << " by layer " << this->name();
++      } else if ((float) cached_num_[id_] / lines_size >=
++          cache_progress_[id_] + IDL_CACHE_PROGRESS) {
++        cache_progress_[id_] = (float) cached_num_[id_] / lines_size;
++        LOG_IF(INFO, P2PManager::global_rank() == 0)     << this->print_current_device() << " "
++                  << std::setw(2) << std::setfill(' ') << f_round1(cache_progress_[id_] * 100.F)
++                  << "% of objects cached for "
++                  << Phase_Name(this->phase_) << " by layer '" << this->name() << "' ("
++                  << cached_num_[id_] << "/" << lines_size << ")";
++      }
++    }
++
++    // go to the next iter
++    line_ids_[thread_id] += line_bucket;
++    if (line_ids_[thread_id] >= lines_size) {
++      while (line_ids_[thread_id] >= lines_size) {
++        line_ids_[thread_id] -= lines_size;
++      }
++      if (thread_id == 0 &&
++          this->rank_ % Caffe::device_in_use_per_host_count() == 0) {
++        if (this->phase_ == TRAIN) {
++          // We have reached the end. Restart from the first.
++          LOG_IF(INFO, P2PManager::global_rank() == 0)
++          << this->print_current_device() << " Restarting data prefetching (" << lines_size << ")";
++          if (epoch_count_ == 0UL) {
++            epoch_count_ += std::lround(lines_[id_].size()
++                * image_data_param.dataset_share_per_node());
++            Caffe::report_epoch_count(epoch_count_);
++          }
++        }
++        if (shuffle) {
++          LOG_IF(INFO, P2PManager::global_rank() == 0) << "Shuffling data";
++          ShuffleImages();
++        }
++      }
++    }
++    line_id = line_ids_[thread_id];
++  }
++  batch->set_data_packing(packing);
++  batch->set_id(this->batch_id(thread_id));
++  return cached_[id_];
++}
++
++INSTANTIATE_CLASS_CPU_FB(ImageSegDataLayer);
++REGISTER_LAYER_CLASS_R(ImageSegData);
++
++}  // namespace caffe
+diff --git a/src/caffe/layers/interp_layer.cpp b/src/caffe/layers/interp_layer.cpp
+new file mode 100644
+index 0000000..42b185b
+--- /dev/null
++++ b/src/caffe/layers/interp_layer.cpp
+@@ -0,0 +1,110 @@
++#include <vector>
++
++#include "caffe/layer.hpp"
++#include "caffe/util/math_functions.hpp"
++#include "caffe/util/interp.hpp"
++#include "caffe/layers/interp_layer.hpp"
++
++namespace caffe {
++
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  InterpParameter interp_param = this->layer_param_.interp_param();
++  pad_beg_ = interp_param.pad_beg();
++  pad_end_ = interp_param.pad_end();
++  CHECK_LE(pad_beg_, 0) << "Only supports non-pos padding (cropping) for now";
++  CHECK_LE(pad_end_, 0) << "Only supports non-pos padding (cropping) for now";
++}
++
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::Reshape(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  num_ = bottom[0]->num();
++  channels_ = bottom[0]->channels();
++  height_in_ = bottom[0]->height();
++  width_in_ = bottom[0]->width();
++  height_in_eff_ = height_in_ + pad_beg_ + pad_end_;
++  width_in_eff_ = width_in_ + pad_beg_ + pad_end_;
++  InterpParameter interp_param = this->layer_param_.interp_param();
++  if (interp_param.has_shrink_factor() &&
++      !interp_param.has_zoom_factor()) {
++    const int shrink_factor = interp_param.shrink_factor();
++    CHECK_GE(shrink_factor, 1) << "Shrink factor must be positive";
++    height_out_ = (height_in_eff_ - 1) / shrink_factor + 1;
++    width_out_ = (width_in_eff_ - 1) / shrink_factor + 1;
++  } else if (interp_param.has_zoom_factor() &&
++             !interp_param.has_shrink_factor()) {
++    const int zoom_factor = interp_param.zoom_factor();
++    CHECK_GE(zoom_factor, 1) << "Zoom factor must be positive";
++    height_out_ = height_in_eff_ + (height_in_eff_ - 1) * (zoom_factor - 1);
++    width_out_ = width_in_eff_ + (width_in_eff_ - 1) * (zoom_factor - 1);
++  } else if (interp_param.has_height() && interp_param.has_width()) {
++    height_out_  = interp_param.height();
++    width_out_  = interp_param.width();
++  } else if (interp_param.has_shrink_factor() &&
++             interp_param.has_zoom_factor()) {
++    const int shrink_factor = interp_param.shrink_factor();
++    const int zoom_factor = interp_param.zoom_factor();
++    CHECK_GE(shrink_factor, 1) << "Shrink factor must be positive";
++    CHECK_GE(zoom_factor, 1) << "Zoom factor must be positive";
++    height_out_ = (height_in_eff_ - 1) / shrink_factor + 1;
++    width_out_ = (width_in_eff_ - 1) / shrink_factor + 1;
++    height_out_ = height_out_ + (height_out_ - 1) * (zoom_factor - 1);
++    width_out_ = width_out_ + (width_out_ - 1) * (zoom_factor - 1);
++  } else {
++    LOG(FATAL);
++  }
++  CHECK_GT(height_in_eff_, 0) << "height should be positive";
++  CHECK_GT(width_in_eff_, 0) << "width should be positive";
++  CHECK_GT(height_out_, 0) << "height should be positive";
++  CHECK_GT(width_out_, 0) << "width should be positive";
++  top[0]->Reshape(num_, channels_, height_out_, width_out_);
++}
++
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::Forward_cpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  caffe_cpu_interp2<Ftype,false>(num_ * channels_,
++    bottom[0]->cpu_data<Ftype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
++    top[0]->mutable_cpu_data<Ftype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
++}
++
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
++  if (!propagate_down[0]) { return; }
++  bottom[0]->set_diff(0.);
++  caffe_cpu_interp2_backward<Btype,false>(num_ * channels_,
++    bottom[0]->mutable_cpu_diff<Btype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
++    top[0]->cpu_diff<Btype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
++}
++
++#ifndef CPU_ONLY
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::Forward_gpu(const vector<Blob*>& bottom,
++      const vector<Blob*>& top) {
++  caffe_gpu_interp2<Ftype,false>(num_ * channels_,
++    bottom[0]->gpu_data<Ftype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
++    top[0]->mutable_gpu_data<Ftype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
++}
++
++template <typename Ftype, typename Btype>
++void InterpLayer<Ftype, Btype>::Backward_gpu(const vector<Blob*>& top,
++      const vector<bool>& propagate_down, const vector<Blob*>& bottom) {
++  if (!propagate_down[0]) { return; }
++  bottom[0]->set_diff(0.);
++  caffe_gpu_interp2_backward<Btype,false>(num_ * channels_,
++    bottom[0]->mutable_gpu_diff<Btype>(), - pad_beg_, - pad_beg_, height_in_eff_, width_in_eff_, height_in_, width_in_,
++    top[0]->gpu_diff<Btype>(), 0, 0, height_out_, width_out_, height_out_, width_out_);
++}
++#endif
++
++#ifdef CPU_ONLY
++STUB_GPU(InterpLayer);
++#endif
++
++INSTANTIATE_CLASS_FB(InterpLayer);
++REGISTER_LAYER_CLASS(Interp);
++
++}  // namespace caffe
+diff --git a/src/caffe/proto/caffe.proto b/src/caffe/proto/caffe.proto
+index e5f8c1f..c82d5ad 100644
+--- a/src/caffe/proto/caffe.proto
++++ b/src/caffe/proto/caffe.proto
+@@ -710,6 +710,11 @@ message LayerParameter {
+   // NVIDIA PARAMETERS (Start with 68 because NV is 68 on an old-style phone)
+   optional DetectNetGroundTruthParameter detectnet_groundtruth_param = 6801;
+   optional DetectNetAugmentationParameter detectnet_augmentation_param = 6802;
++
++  // For PSPNet
++  optional InterpParameter interp_param = 3001;
++  optional BNParameter bn_param = 3002;
++  
+ }
+ 
+ // Message that stores parameters used to apply transformation
+@@ -825,6 +830,14 @@ message TransformationParameter {
+   optional ExpansionParameter expand_param = 214;
+   // Constraint for emitting the annotation after transformation.
+   optional EmitConstraint emit_constraint = 210;  
++
++  // For PSPNet
++  // If we want to do data augmentation, Scaling factor for randomly scaling input images
++  repeated float scale_factors = 3001;
++  // the width for cropped region
++  optional uint32 crop_width = 3002 [default = 0];
++  // the height for cropped region
++  optional uint32 crop_height = 3003 [default = 0];
+ }
+ // Message that stores parameters used to create gridbox ground truth
+ message DetectNetGroundTruthParameter {
+@@ -1139,6 +1152,24 @@ message BatchNormParameter {
+   optional Engine engine = 15 [default = DEFAULT];
+ }
+ 
++message BNParameter {
++  // For PSPNet
++  optional FillerParameter slope_filler = 1;
++  optional FillerParameter bias_filler = 2;
++  optional float momentum = 3 [default = 0.9];
++  optional float eps = 4 [default = 1e-5];
++  // If true, will use the moving average mean and std for training and test.
++  // Will override the lr_param and freeze all the parameters.
++  // Make sure to initialize the layer properly with pretrained parameters.
++  optional bool frozen = 5 [default = false];
++  enum Engine {
++    DEFAULT = 0;
++    CAFFE = 1;
++    CUDNN = 2;
++  }
++  optional Engine engine = 6 [default = DEFAULT];
++}
++
+ message BiasParameter {
+   // The first axis of bottom[0] (the first input Blob) along which to apply
+   // bottom[1] (the second input Blob).  May be negative to index from the end
+@@ -1567,6 +1598,16 @@ message ImageDataParameter {
+   // In multi-node training it's helpful sometimes to limit amount of data used by a node.
+   // Set to 2 to cut it by half after first shuffle (ignored if shuffle is off, TRAIN only).
+   optional float dataset_share_per_node = 17 [default = 1];
++
++  // For PSPNet
++  // This is the value set for pixels or images where we don't know the label
++  optional int32 ignore_label = 3001 [default = 255];
++  enum LabelType {
++    NONE = 0;
++    IMAGE = 1;
++    PIXEL = 2;
++  }
++  optional LabelType label_type = 3002 [default = IMAGE];
+ }
+ 
+ message InfogainLossParameter {
+@@ -1591,6 +1632,16 @@ message InnerProductParameter {
+   optional bool transpose = 6 [default = false];
+ }
+ 
++message InterpParameter {
++  // For PSPNet
++  optional int32 height = 1 [default = 0]; // Height of output
++  optional int32 width = 2 [default = 0]; // Width of output
++  optional int32 zoom_factor = 3 [default = 1]; // zoom factor
++  optional int32 shrink_factor = 4 [default = 1]; // shrink factor
++  optional int32 pad_beg = 5 [default = 0]; // padding at begin of input
++  optional int32 pad_end = 6 [default = 0]; // padding at end of input
++}
++
+ message InputParameter {
+   // This layer produces N >= 1 top blob(s) to be assigned manually.
+   // Define N shapes to set a shape for each top.
+diff --git a/src/caffe/util/interp.cpp b/src/caffe/util/interp.cpp
+new file mode 100644
+index 0000000..f64cb64
+--- /dev/null
++++ b/src/caffe/util/interp.cpp
+@@ -0,0 +1,317 @@
++// Copyright 2014 George Papandreou
++
++#include "caffe/common.hpp"
++#include "caffe/util/interp.hpp"
++#include <algorithm>
++#include <cmath>
++
++namespace caffe {
++
++// Bi-linear interpolation
++// IN : [channels height1 width1] cropped from a bigger [Height1 Width1] image
++// OUT: [channels height2 width2] cropped from a bigger [Height2 Width2] image
++template <typename Dtype, bool packed>
++void caffe_cpu_interp2(const int channels,
++    const Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  CHECK(x1 >= 0 && y1 >= 0 && height1 > 0 && width1 > 0 && x2 >= 0 && y2 >= 0 && height2 > 0 && width2 > 0);
++  CHECK(Width1 >= width1 + x1 && Height1 >= height1 + y1 && Width2 >= width2 + x2 && Height2 >= height2 + y2);
++  // special case: just copy
++  if (height1 == height2 && width1 == width2) {
++    for (int h2 = 0; h2 < height2; ++h2) {
++      const int h1 = h2;
++      for (int w2 = 0; w2 < width2; ++w2) {
++	const int w1 = w2;
++	if (packed) {
++	  const Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	  Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	  for (int c = 0; c < channels; ++c) {
++	    pos2[0] = pos1[0];
++	    pos1++;
++	    pos2++;
++	  }
++	}
++	else {
++	  const Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	  Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	  for (int c = 0; c < channels; ++c) {
++	    pos2[0] = pos1[0];
++	    pos1 += Width1 * Height1;
++	    pos2 += Width2 * Height2;
++	  }
++	}
++      }
++    }
++    return;
++  }
++  const float rheight = (height2 > 1) ? static_cast<float>(height1 - 1) / (height2 - 1) : 0.f;
++  const float rwidth = (width2 > 1) ? static_cast<float>(width1 - 1) / (width2 - 1) : 0.f;
++  for (int h2 = 0; h2 < height2; ++h2) {
++    const float h1r = rheight * h2;
++    const int h1 = h1r;
++    const int h1p = (h1 < height1 - 1) ? 1 : 0;
++    const Dtype h1lambda = h1r - h1;
++    const Dtype h0lambda = Dtype(1.) - h1lambda;
++    for (int w2 = 0; w2 < width2; ++w2) {
++      const float w1r = rwidth * w2;
++      const int w1 = w1r;
++      const int w1p = (w1 < width1 - 1) ? 1 : 0;
++      const Dtype w1lambda = w1r - w1;
++      const Dtype w0lambda = Dtype(1.) - w1lambda;
++      if (packed) {
++	const Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	for (int c = 0; c < channels; ++c) {
++	  pos2[0] =
++	    h0lambda * (w0lambda * pos1[0]            + w1lambda * pos1[channels * w1p]) + 
++	    h1lambda * (w0lambda * pos1[channels * h1p * Width1] + w1lambda * pos1[channels * (h1p * Width1 + w1p)]);
++	  pos1++;
++	  pos2++;
++	}
++      }
++      else {
++	const Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	for (int c = 0; c < channels; ++c) {
++	  pos2[0] =
++	    h0lambda * (w0lambda * pos1[0]            + w1lambda * pos1[w1p]) + 
++	    h1lambda * (w0lambda * pos1[h1p * Width1] + w1lambda * pos1[h1p * Width1 + w1p]);
++	  pos1 += Width1 * Height1;
++	  pos2 += Width2 * Height2;
++	}
++      }
++    }
++  }
++}
++
++
++// Backward (adjoint) operation 1 <- 2 (accumulates)
++template <typename Dtype, bool packed>
++void caffe_cpu_interp2_backward(const int channels,
++    Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    const Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  CHECK(x1 >= 0 && y1 >= 0 && height1 > 0 && width1 > 0 && x2 >= 0 && y2 >= 0 && height2 > 0 && width2 > 0);
++  CHECK(Width1 >= width1 + x1 && Height1 >= height1 + y1 && Width2 >= width2 + x2 && Height2 >= height2 + y2);
++  // special case: same-size matching grids
++  if (height1 == height2 && width1 == width2) {
++    for (int h2 = 0; h2 < height2; ++h2) {
++      const int h1 = h2;
++      for (int w2 = 0; w2 < width2; ++w2) {
++	const int w1 = w2;
++	if (packed) {
++	  Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	  const Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	  for (int c = 0; c < channels; ++c) {
++	    pos1[0] += pos2[0];
++	    pos1++;
++	    pos2++;
++	  }
++	}
++	else {
++	  Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	  const Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	  for (int c = 0; c < channels; ++c) {
++	    pos1[0] += pos2[0];
++	    pos1 += Width1 * Height1;
++	    pos2 += Width2 * Height2;
++	  }
++	}
++      }
++    }
++    return;
++  }
++  const float rheight = (height2 > 1) ? static_cast<float>(height1 - 1) / (height2 - 1) : 0.f;
++  const float rwidth = (width2 > 1) ? static_cast<float>(width1 - 1) / (width2 - 1) : 0.f;
++  for (int h2 = 0; h2 < height2; ++h2) {
++    const float h1r = rheight * h2;
++    const int h1 = h1r;
++    const int h1p = (h1 < height1 - 1) ? 1 : 0;
++    const Dtype h1lambda = h1r - h1;
++    const Dtype h0lambda = Dtype(1.) - h1lambda;
++    for (int w2 = 0; w2 < width2; ++w2) {
++      const float w1r = rwidth * w2;
++      const int w1 = w1r;
++      const int w1p = (w1 < width1 - 1) ? 1 : 0;
++      const Dtype w1lambda = w1r - w1;
++      const Dtype w0lambda = Dtype(1.) - w1lambda;
++      if (packed) {
++	Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	const Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	for (int c = 0; c < channels; ++c) {
++	  pos1[0] += h0lambda * w0lambda * pos2[0];
++	  pos1[channels * w1p] += h0lambda * w1lambda * pos2[0];
++	  pos1[channels * h1p * Width1] += h1lambda * w0lambda * pos2[0];
++	  pos1[channels * (h1p * Width1 + w1p)] += h1lambda * w1lambda * pos2[0];
++	  pos1++;
++	  pos2++;
++	}
++      }
++      else {
++	Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	const Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	for (int c = 0; c < channels; ++c) {
++	  pos1[0] += h0lambda * w0lambda * pos2[0];
++	  pos1[w1p] += h0lambda * w1lambda * pos2[0];
++	  pos1[h1p * Width1] += h1lambda * w0lambda * pos2[0];
++	  pos1[h1p * Width1 + w1p] += h1lambda * w1lambda * pos2[0];
++	  pos1 += Width1 * Height1;
++	  pos2 += Width2 * Height2;
++	}
++      }
++    }
++  }
++}
++
++// Create Gaussian pyramid of an image. Assume output space is pre-allocated.
++// IN : [channels height width]
++template <typename Dtype, bool packed>
++void caffe_cpu_pyramid2(const int channels,
++    const Dtype *data, const int height, const int width,
++    Dtype *data_pyr, const int levels) {
++  CHECK(height > 0 && width > 0 && levels >= 0);
++  int height1 = height, width1 = width;
++  int height2 = height, width2 = width;
++  const Dtype *data1 = data;
++  Dtype *data2 = data_pyr;
++  for (int l = 0; l < levels; ++l) {
++    height2 /= 2;
++    width2 /= 2;
++    if (height2 == 0 || width2 == 0) {
++      break;
++    }
++    for (int h2 = 0; h2 < height2; ++h2) {
++      const int h1 = 2 * h2;
++      for (int w2 = 0; w2 < width2; ++w2) {
++	const int w1 = 2 * w2;
++	if (packed) {
++	  const Dtype* pos1 = &data1[channels * (h1 * width1 + w1)];
++	  Dtype* pos2 = &data2[channels * (h2 * width2 + w2)];
++	  for (int c = 0; c < channels; ++c) {
++	    pos2[0] =  static_cast<Dtype>(.25) *
++	      (pos1[0]                 + pos1[channels] + 
++	       pos1[channels * width1] + pos1[channels * (width1 + 1)]);
++	    pos1++;
++	    pos2++;
++	  }
++	}
++	else {
++	  const Dtype* pos1 = &data1[h1 * width1 + w1];
++	  Dtype* pos2 = &data2[h2 * width2 + w2];
++	  for (int c = 0; c < channels; ++c) {
++	    pos2[0] =  static_cast<Dtype>(.25) *
++	      (pos1[0]      + pos1[1] + 
++	       pos1[width1] + pos1[width1 + 1]);
++	    pos1 += width1 * height1;
++	    pos2 += width2 * height2;
++	  }
++	}
++      }
++    }
++    data1 = data2;
++    height1 = height2;
++    width1 = width2;
++    data2 += channels * height2 * width2;
++  }
++}
++
++  /*
++template <typename Dtype, bool packed>
++void caffe_cpu_mosaic(const int channels,
++    const Dtype *data1, const MosaicParameter mosaic_params1,
++    const Dtype *data_pyr, const int levels,
++          Dtype *data2, const MosaicParameter mosaic_params2) {
++  const int num1 = mosaic_params1.rects_size();
++  const int num2 = mosaic_params2.rects_size();
++  CHECK(num1 == num2 || (num1 == 1 && num2 > 1) || (num2 == 1 && num1 > 1));
++  const int num = std::max(num1, num2);
++  for (int i = 0; i < num; ++i) {
++    const Rect rect1 = mosaic_params1.rects((i < num1) ? i : 0);
++    const Rect rect2 = mosaic_params2.rects((i < num2) ? i : 0);
++    int level = log2(sqrt((float)rect1.height() * rect1.width() / rect2.height() / rect2.width()));
++    level = std::max(0, std::min(levels, level));
++    if (data_pyr == 0 || level == 0) {
++      caffe_cpu_interp2<Dtype,packed>(channels,
++	  data1, rect1.x(), rect1.y(), rect1.height(), rect1.width(), mosaic_params1.height(), mosaic_params1.width(),
++	  data2, rect2.x(), rect2.y(), rect2.height(), rect2.width(), mosaic_params2.height(), mosaic_params2.width());
++    }
++    else {
++      const Dtype *data_pyr_l = data_pyr;
++      int factor = 2;
++      for (int l = 1; l < level; ++l) {
++	data_pyr_l += channels * (mosaic_params1.height() / factor) * (mosaic_params1.width() / factor);
++	factor *= 2;
++      }
++      caffe_cpu_interp2<Dtype,packed>(channels,
++	  data_pyr_l, rect1.x() / factor, rect1.y() / factor, rect1.height() / factor, rect1.width() / factor, mosaic_params1.height() / factor, mosaic_params1.width() / factor,
++	  data2, rect2.x(), rect2.y(), rect2.height(), rect2.width(), mosaic_params2.height(), mosaic_params2.width());      
++    }
++  }
++}
++
++template <typename Dtype, bool packed>
++void caffe_gpu_mosaic(const int channels,
++    const Dtype *data1, const MosaicParameter mosaic_params1,
++    const Dtype *data_pyr, const int levels,
++          Dtype *data2, const MosaicParameter mosaic_params2) {
++  const int num1 = mosaic_params1.rects_size();
++  const int num2 = mosaic_params2.rects_size();
++  CHECK(num1 == num2 || (num1 == 1 && num2 > 1) || (num2 == 1 && num1 > 1));
++  const int num = std::max(num1, num2);
++  for (int i = 0; i < num; ++i) {
++    const Rect rect1 = mosaic_params1.rects((i < num1) ? i : 0);
++    const Rect rect2 = mosaic_params2.rects((i < num2) ? i : 0);
++    int level = log2(sqrt((float)rect1.height() * rect1.width() / rect2.height() / rect2.width()));
++    level = std::max(0, std::min(levels, level));
++    if (data_pyr == 0 || level == 0) {
++      caffe_gpu_interp2<Dtype,packed>(channels,
++	  data1, rect1.x(), rect1.y(), rect1.height(), rect1.width(), mosaic_params1.height(), mosaic_params1.width(),
++	  data2, rect2.x(), rect2.y(), rect2.height(), rect2.width(), mosaic_params2.height(), mosaic_params2.width());
++    }
++    else {
++      const Dtype *data_pyr_l = data_pyr;
++      int factor = 2;
++      for (int l = 1; l < level; ++l) {
++	data_pyr_l += channels * (mosaic_params1.height() / factor) * (mosaic_params1.width() / factor);
++	factor *= 2;
++      }
++      caffe_gpu_interp2<Dtype,packed>(channels,
++	  data_pyr_l, rect1.x() / factor, rect1.y() / factor, rect1.height() / factor, rect1.width() / factor, mosaic_params1.height() / factor, mosaic_params1.width() / factor,
++	  data2, rect2.x(), rect2.y(), rect2.height(), rect2.width(), mosaic_params2.height(), mosaic_params2.width());      
++    }
++  }
++}
++
++  */
++
++// Explicit instances
++template void caffe_cpu_interp2<half_float::half,false>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2<half_float::half,true>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2<float,false>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2<float,true>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2<double,false>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2<double,true>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
++
++template void caffe_cpu_interp2_backward<half_float::half,false>(const int, half_float::half *, const int, const int, const int, const int, const int, const int, const half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2_backward<float,false>(const int, float *, const int, const int, const int, const int, const int, const int, const float *, const int, const int, const int, const int, const int, const int);
++template void caffe_cpu_interp2_backward<double,false>(const int, double *, const int, const int, const int, const int, const int, const int, const double *, const int, const int, const int, const int, const int, const int);
++
++template void caffe_cpu_pyramid2<half_float::half,false>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
++template void caffe_cpu_pyramid2<half_float::half,true>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
++template void caffe_cpu_pyramid2<float,false>(const int, const float *, const int, const int, float *, const int);
++template void caffe_cpu_pyramid2<float,true>(const int, const float *, const int, const int, float *, const int);
++template void caffe_cpu_pyramid2<double,false>(const int, const double *, const int, const int, double *, const int);
++template void caffe_cpu_pyramid2<double,true>(const int, const double *, const int, const int, double *, const int);
++
++  /*
++template void caffe_cpu_mosaic<float,false>(const int, const float *, const MosaicParameter, const float *, const int, float *, const MosaicParameter);
++template void caffe_cpu_mosaic<float,true>(const int, const float *, const MosaicParameter, const float *, const int, float *, const MosaicParameter);
++template void caffe_cpu_mosaic<double,false>(const int, const double *, const MosaicParameter, const double *, const int, double *, const MosaicParameter);
++template void caffe_cpu_mosaic<double,true>(const int, const double *, const MosaicParameter, const double *, const int, double *, const MosaicParameter);
++
++template void caffe_gpu_mosaic<float,false>(const int, const float *, const MosaicParameter, const float *, const int, float *, const MosaicParameter);
++template void caffe_gpu_mosaic<float,true>(const int, const float *, const MosaicParameter, const float *, const int, float *, const MosaicParameter);
++template void caffe_gpu_mosaic<double,false>(const int, const double *, const MosaicParameter, const double *, const int, double *, const MosaicParameter);
++template void caffe_gpu_mosaic<double,true>(const int, const double *, const MosaicParameter, const double *, const int, double *, const MosaicParameter);
++  */
++
++}  // namespace caffe
+diff --git a/src/caffe/util/interp.cu b/src/caffe/util/interp.cu
+new file mode 100644
+index 0000000..1bfb902
+--- /dev/null
++++ b/src/caffe/util/interp.cu
+@@ -0,0 +1,283 @@
++// Copyright 2014 George Papandreou
++
++#include "caffe/common.hpp"
++#include "caffe/common.cuh"
++#include "caffe/util/interp.hpp"
++#include "caffe/util/gpu_util.cuh"
++#include "caffe/util/half.cuh"
++
++namespace caffe {
++
++// Bi-linear interpolation
++// IN : [channels height1 width1] cropped from a bigger [Height1 Width1] image
++// OUT: [channels height2 width2] cropped from a bigger [Height2 Width2] image
++template <typename Dtype, bool packed>
++__global__ void caffe_gpu_interp2_kernel(const int n, const float rheight, const float rwidth,
++    const int channels,
++    const Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  int index = threadIdx.x + blockIdx.x * blockDim.x;
++  if (index < n) {
++    const int w2 = index % width2; // 0:width2-1
++    const int h2 = index / width2; // 0:height2-1
++    // special case: just copy
++    if (height1 == height2 && width1 == width2) {
++      const int h1 = h2;
++      const int w1 = w2;
++      if (packed) {
++	const Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	for (int c = 0; c < channels; ++c) {
++	  pos2[0] = pos1[0];
++	  pos1++;
++	  pos2++;
++	}
++      }
++      else {
++	const Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	for (int c = 0; c < channels; ++c) {
++	pos2[0] = pos1[0];
++	pos1 += Width1 * Height1;
++	pos2 += Width2 * Height2;
++	}
++      }
++      return;
++    }
++    //
++    const float h1r = rheight * h2;
++    const int h1 = h1r;
++    const int h1p = (h1 < height1 - 1) ? 1 : 0;
++    const Dtype h1lambda = h1r - h1;
++    const Dtype h0lambda = Dtype(1.) - h1lambda;
++    //
++    const float w1r = rwidth * w2;
++    const int w1 = w1r;
++    const int w1p = (w1 < width1 - 1) ? 1 : 0;
++    const Dtype w1lambda = w1r - w1;
++    const Dtype w0lambda = Dtype(1.) - w1lambda;
++    //
++    if (packed) {
++      const Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++      Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++      for (int c = 0; c < channels; ++c) {
++	pos2[0] =
++	  h0lambda * (w0lambda * pos1[0]            + w1lambda * pos1[channels * w1p]) + 
++	  h1lambda * (w0lambda * pos1[channels * h1p * Width1] + w1lambda * pos1[channels * (h1p * Width1 + w1p)]);
++	pos1++;
++	pos2++;
++      }
++    }
++    else {
++      const Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++      Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++      for (int c = 0; c < channels; ++c) {
++	pos2[0] =
++	  h0lambda * (w0lambda * pos1[0]            + w1lambda * pos1[w1p]) + 
++	  h1lambda * (w0lambda * pos1[h1p * Width1] + w1lambda * pos1[h1p * Width1 + w1p]);
++	pos1 += Width1 * Height1;
++	pos2 += Width2 * Height2;
++      }
++    }
++  }
++}
++
++template <typename Dtype, bool packed>
++void caffe_gpu_interp2(const int channels,
++    const Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  CHECK(x1 >= 0 && y1 >= 0 && height1 > 0 && width1 > 0 && x2 >= 0 && y2 >= 0 && height2 > 0 && width2 > 0);
++  CHECK(Width1 >= width1 + x1 && Height1 >= height1 + y1 && Width2 >= width2 + x2 && Height2 >= height2 + y2);
++  const float rheight = (height2 > 1) ? static_cast<float>(height1 - 1) / (height2 - 1) : 0.f;
++  const float rwidth = (width2 > 1) ? static_cast<float>(width1 - 1) / (width2 - 1) : 0.f;
++  const int num_kernels = height2 * width2;
++  caffe_gpu_interp2_kernel<Dtype,packed><<<CAFFE_GET_BLOCKS(num_kernels), CAFFE_CUDA_NUM_THREADS>>>
++    (num_kernels, rheight, rwidth, channels,
++     data1, x1, y1, height1, width1, Height1, Width1,
++     data2, x2, y2, height2, width2, Height2, Width2);
++  CUDA_POST_KERNEL_CHECK;
++}
++
++// Backward (adjoint) operation 1 <- 2 (accumulates)
++template <typename Dtype, bool packed>
++__global__ void caffe_gpu_interp2_kernel_backward(const int n, const float rheight, const float rwidth,
++    const int channels,
++    Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    const Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  int index = threadIdx.x + blockIdx.x * blockDim.x;
++  if (index < n) {
++    const int w2 = index % width2; // 0:width2-1
++    const int h2 = index / width2; // 0:height2-1
++    // special case: just copy
++    if (height1 == height2 && width1 == width2) {
++      const int h1 = h2;
++      const int w1 = w2;
++      if (packed) {
++	Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++	const Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++	for (int c = 0; c < channels; ++c) {
++	  pos1[0] += pos2[0];
++	  pos1++;
++	  pos2++;
++	}
++      }
++      else {
++	Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++	const Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++	for (int c = 0; c < channels; ++c) {
++	  pos1[0] += pos2[0];
++	  pos1 += Width1 * Height1;
++	  pos2 += Width2 * Height2;
++	}
++      }
++      return;
++    }
++    //
++    const float h1r = rheight * h2;
++    const int h1 = h1r;
++    const int h1p = (h1 < height1 - 1) ? 1 : 0;
++    const Dtype h1lambda = h1r - h1;
++    const Dtype h0lambda = Dtype(1.) - h1lambda;
++    //
++    const float w1r = rwidth * w2;
++    const int w1 = w1r;
++    const int w1p = (w1 < width1 - 1) ? 1 : 0;
++    const Dtype w1lambda = w1r - w1;
++    const Dtype w0lambda = Dtype(1.) - w1lambda;
++    //
++    if (packed) {
++      Dtype* pos1 = &data1[channels * ((y1 + h1) * Width1 + (x1 + w1))];
++      const Dtype* pos2 = &data2[channels * ((y2 + h2) * Width2 + (x2 + w2))];
++      for (int c = 0; c < channels; ++c) {
++  const Dtype val1 = h0lambda * w0lambda * pos2[0];
++  const Dtype val2 = h0lambda * w1lambda * pos2[0];
++  const Dtype val3 = h1lambda * w0lambda * pos2[0];
++  const Dtype val4 = h1lambda * w1lambda * pos2[0];
++	caffe_gpu_atomic_add(val1, &pos1[0]);
++	caffe_gpu_atomic_add(val2, &pos1[channels * w1p]);
++	caffe_gpu_atomic_add(val3, &pos1[channels * h1p * Width1]);
++	caffe_gpu_atomic_add(val4, &pos1[channels * (h1p * Width1 + w1p)]);
++	pos1++;
++	pos2++;
++      }
++    }
++    else {
++      Dtype* pos1 = &data1[(y1 + h1) * Width1 + (x1 + w1)];
++      const Dtype* pos2 = &data2[(y2 + h2) * Width2 + (x2 + w2)];
++      for (int c = 0; c < channels; ++c) {
++  const Dtype val1 = h0lambda * w0lambda * pos2[0];
++  const Dtype val2 = h0lambda * w1lambda * pos2[0];
++  const Dtype val3 = h1lambda * w0lambda * pos2[0];
++  const Dtype val4 = h1lambda * w1lambda * pos2[0];
++	caffe_gpu_atomic_add(val1, &pos1[0]);
++	caffe_gpu_atomic_add(val2, &pos1[w1p]);
++	caffe_gpu_atomic_add(val3, &pos1[h1p * Width1]);
++	caffe_gpu_atomic_add(val4, &pos1[h1p * Width1 + w1p]);
++	pos1 += Width1 * Height1;
++	pos2 += Width2 * Height2;
++      }
++    }
++  }
++}
++
++template <typename Dtype, bool packed>
++void caffe_gpu_interp2_backward(const int channels,
++    Dtype *data1, const int x1, const int y1, const int height1, const int width1, const int Height1, const int Width1,
++    const Dtype *data2, const int x2, const int y2, const int height2, const int width2, const int Height2, const int Width2) {
++  CHECK(x1 >= 0 && y1 >= 0 && height1 > 0 && width1 > 0 && x2 >= 0 && y2 >= 0 && height2 > 0 && width2 > 0);
++  CHECK(Width1 >= width1 + x1 && Height1 >= height1 + y1 && Width2 >= width2 + x2 && Height2 >= height2 + y2);
++  const float rheight = (height2 > 1) ? static_cast<float>(height1 - 1) / (height2 - 1) : 0.f;
++  const float rwidth = (width2 > 1) ? static_cast<float>(width1 - 1) / (width2 - 1) : 0.f;
++  const int num_kernels = height2 * width2;
++  caffe_gpu_interp2_kernel_backward<Dtype,packed><<<CAFFE_GET_BLOCKS(num_kernels), CAFFE_CUDA_NUM_THREADS>>>
++    (num_kernels, rheight, rwidth, channels,
++     data1, x1, y1, height1, width1, Height1, Width1,
++     data2, x2, y2, height2, width2, Height2, Width2);
++  CUDA_POST_KERNEL_CHECK;
++}
++
++
++// Create Gaussian pyramid of an image. Assume output space is pre-allocated.
++// IN : [channels height width]
++template <typename Dtype, bool packed>
++__global__ void caffe_gpu_pyramid2_kernel(const int n, const int channels,
++    const Dtype *data1, const int height1, const int width1,
++    Dtype *data2, const int height2, const int width2) {
++  int index = threadIdx.x + blockIdx.x * blockDim.x;
++  if (index < n) {
++    const int w2 = index % width2; // 0:width2-1
++    const int h2 = index / width2; // 0:height2-1
++    const int w1 = 2 * w2;
++    const int h1 = 2 * h2;
++    if (packed) {
++      const Dtype* pos1 = &data1[channels * (h1 * width1 + w1)];
++      Dtype* pos2 = &data2[channels * (h2 * width2 + w2)];
++      for (int c = 0; c < channels; ++c) {
++	pos2[0] =  static_cast<Dtype>(.25) *
++	  (pos1[0]                 + pos1[channels] + 
++	   pos1[channels * width1] + pos1[channels * (width1 + 1)]);
++	pos1++;
++	pos2++;
++      }
++    }
++    else {
++      const Dtype* pos1 = &data1[h1 * width1 + w1];
++      Dtype* pos2 = &data2[h2 * width2 + w2];
++      for (int c = 0; c < channels; ++c) {
++	pos2[0] =  static_cast<Dtype>(.25) *
++	  (pos1[0]      + pos1[1] + 
++	   pos1[width1] + pos1[width1 + 1]);
++	pos1 += width1 * height1;
++	pos2 += width2 * height2;
++      }
++    }
++  }
++}
++
++template <typename Dtype, bool packed>
++void caffe_gpu_pyramid2(const int channels,
++    const Dtype *data, const int height, const int width,
++    Dtype *data_pyr, const int levels) {
++  CHECK(height > 0 && width > 0 && levels >= 0);
++  int height1 = height, width1 = width;
++  int height2 = height, width2 = width;
++  const Dtype *data1 = data;
++  Dtype *data2 = data_pyr;
++  for (int l = 0; l < levels; ++l) {
++    height2 /= 2;
++    width2 /= 2;
++    if (height2 == 0 || width2 == 0) {
++      break;
++    }
++    const int num_kernels = height2 * width2;
++    caffe_gpu_pyramid2_kernel<Dtype,packed><<<CAFFE_GET_BLOCKS(num_kernels), CAFFE_CUDA_NUM_THREADS>>>
++      (num_kernels, channels, data1, height1, width1, data2, height2, width2);
++    CUDA_POST_KERNEL_CHECK;
++    data1 = data2;
++    height1 = height2;
++    width1 = width2;
++    data2 += channels * height2 * width2;
++  }
++}
++
++
++// Explicit instances
++template void caffe_gpu_interp2<half_float::half,false>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2<half_float::half,true>(const int, const half_float::half *, const int, const int, const int, const int, const int, const int, half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2<float,false>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2<float,true>(const int, const float *, const int, const int, const int, const int, const int, const int, float *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2<double,false>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2<double,true>(const int, const double *, const int, const int, const int, const int, const int, const int, double *, const int, const int, const int, const int, const int, const int);
++
++template void caffe_gpu_interp2_backward<half_float::half,false>(const int, half_float::half *, const int, const int, const int, const int, const int, const int, const half_float::half *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2_backward<float,false>(const int, float *, const int, const int, const int, const int, const int, const int, const float *, const int, const int, const int, const int, const int, const int);
++template void caffe_gpu_interp2_backward<double,false>(const int, double *, const int, const int, const int, const int, const int, const int, const double *, const int, const int, const int, const int, const int, const int);
++
++template void caffe_gpu_pyramid2<half_float::half,false>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
++template void caffe_gpu_pyramid2<half_float::half,true>(const int, const half_float::half *, const int, const int, half_float::half *, const int);
++template void caffe_gpu_pyramid2<float,false>(const int, const float *, const int, const int, float *, const int);
++template void caffe_gpu_pyramid2<float,true>(const int, const float *, const int, const int, float *, const int);
++template void caffe_gpu_pyramid2<double,false>(const int, const double *, const int, const int, double *, const int);
++template void caffe_gpu_pyramid2<double,true>(const int, const double *, const int, const int, double *, const int);
++
++}  // namespace caffe

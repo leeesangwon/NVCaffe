@@ -5,6 +5,7 @@ FROM nvcr.io/nvidia/caffe:19.01-py2
 COPY nvcaffe-refinedet-modifications.patch /tmp
 COPY nvcaffe-refinedet-modifications.2.patch /tmp
 COPY nvcaffe-pspnet-modifications.patch /tmp
+COPY nvcaffe-refinedet-modifications.3.patch /tmp
 
 # Change working directory to NVCaffe source path
 WORKDIR /opt/caffe
@@ -13,6 +14,7 @@ WORKDIR /opt/caffe
 RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.patch
 RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.2.patch
 RUN patch -p1 < /tmp/nvcaffe-pspnet-modifications.patch
+RUN patch -p1 < /tmp/nvcaffe-refinedet-modifications.3.patch
 
 # Rebuild NVCaffe
 RUN mkdir build && cd build && \

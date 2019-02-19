@@ -134,6 +134,15 @@ void DecodeBBoxesAll(const vector<LabelBBox>& all_loc_pred,
     const CodeType code_type, const bool variance_encoded_in_target,
     const bool clip, vector<LabelBBox>* all_decode_bboxes);
 
+void CasRegDecodeBBoxesAll(const vector<LabelBBox>& all_loc_pred,
+    const vector<NormalizedBBox>& prior_bboxes,
+    const vector<vector<float> >& prior_variances,
+    const int num, const bool share_location,
+    const int num_loc_classes, const int background_label_id,
+    const CodeType code_type, const bool variance_encoded_in_target,
+    const bool clip, vector<LabelBBox>* all_decode_bboxes,
+	const vector<LabelBBox>& all_arm_loc_pred);
+
 // Match prediction bboxes with ground truth bboxes.
 void MatchBBox(const vector<NormalizedBBox>& gt,
     const vector<NormalizedBBox>& pred_bboxes, const int label,
@@ -157,6 +166,15 @@ void FindMatches(const vector<LabelBBox>& all_loc_preds,
       const MultiBoxLossParameter& multibox_loss_param,
       vector<map<int, vector<float> > >* all_match_overlaps,
       vector<map<int, vector<int> > >* all_match_indices);
+
+void CasRegFindMatches(const vector<LabelBBox>& all_loc_preds,
+      const map<int, vector<NormalizedBBox> >& all_gt_bboxes,
+      const vector<NormalizedBBox>& prior_bboxes,
+      const vector<vector<float> >& prior_variances,
+      const MultiBoxLossParameter& multibox_loss_param,
+      vector<map<int, vector<float> > >* all_match_overlaps,
+      vector<map<int, vector<int> > >* all_match_indices,
+	  const vector<LabelBBox>& all_arm_loc_preds);
 
 // Count the number of matches from the match indices.
 int CountNumMatches(const vector<map<int, vector<int> > >& all_match_indices,
@@ -183,7 +201,8 @@ void MineHardExamples(const Blob& conf_blob,
     const MultiBoxLossParameter& multibox_loss_param,
     int* num_matches, int* num_negs,
     vector<map<int, vector<int> > >* all_match_indices,
-    vector<vector<int> >* all_neg_indices);
+    vector<vector<int> >* all_neg_indices,
+    const Dtype* arm_conf_data);
 
 // Retrieve bounding box ground truth from gt_data.
 //    gt_data: 1 x 1 x num_gt x 7 blob.
@@ -235,6 +254,16 @@ void EncodeLocPrediction(const vector<LabelBBox>& all_loc_preds,
       const MultiBoxLossParameter& multibox_loss_param,
       Dtype* loc_pred_data, Dtype* loc_gt_data);
 
+template <typename Dtype>
+void CasRegEncodeLocPrediction(const vector<LabelBBox>& all_loc_preds,
+      const map<int, vector<NormalizedBBox> >& all_gt_bboxes,
+      const vector<map<int, vector<int> > >& all_match_indices,
+      const vector<NormalizedBBox>& prior_bboxes,
+      const vector<vector<float> >& prior_variances,
+      const MultiBoxLossParameter& multibox_loss_param,
+      Dtype* loc_pred_data, Dtype* loc_gt_data,
+      const vector<LabelBBox>& all_arm_loc_preds);
+
 // Compute the localization loss per matched prior.
 //    loc_pred: stores the location prediction results.
 //    loc_gt: stores the encoded location ground truth.
@@ -248,6 +277,11 @@ void ComputeLocLoss(const TBlob<Dtype>& loc_pred, const TBlob<Dtype>& loc_gt,
       const vector<map<int, vector<int> > >& all_match_indices,
       const int num, const int num_priors, const LocLossType loc_loss_type,
       vector<vector<float> >* all_loc_loss);
+
+template <typename Dtype>
+void OSGetConfidenceScores(const Dtype* conf_data, const Dtype* arm_conf_data,
+	  const int num, const int num_preds_per_class, const int num_classes,
+      vector<map<int, vector<float> > >* conf_scores, float objectness_score);
 
 // Get confidence predictions from conf_data.
 //    conf_data: num x num_preds_per_class * num_classes blob.
@@ -469,9 +503,22 @@ void DecodeBBoxesGPU(const int nthreads,
           const bool clip_bbox, Dtype* bbox_data);
 
 template <typename Dtype>
+void CasRegDecodeBBoxesGPU(const int nthreads,
+          const Dtype* loc_data, const Dtype* prior_data,
+          const CodeType code_type, const bool variance_encoded_in_target,
+          const int num_priors, const bool share_location,
+          const int num_loc_classes, const int background_label_id,
+          const bool clip_bbox, Dtype* bbox_data, const Dtype* arm_loc_data);
+
+template <typename Dtype>
 void PermuteDataGPU(const int nthreads,
           const Dtype* data, const int num_classes, const int num_data,
           const int num_dim, Dtype* new_data);
+
+template <typename Dtype>
+void OSPermuteDataGPU(const int nthreads,
+          const Dtype* data, const Dtype* arm_data, const int num_classes, const int num_data,
+          const int num_dim, Dtype* new_data, float objectness_score);
 
 template <typename Dtype>
 void SoftMaxGPU(const Dtype* data, const int outer_num, const int channels,
